@@ -4,7 +4,33 @@
 #include <string.h>
 #include <unistd.h>
 
+#ifndef CONFIG_PATH
+#define CONFIG_PATH "config.json"
+#endif
+#ifndef QUEUE_PATH
+#define QUEUE_PATH "attach-target-url.txt"
+#endif
+
 static const char base64_table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+static int config_resume_path(char *output, size_t output_size) {
+  FILE *config = fopen(CONFIG_PATH, "r");
+  if (!config) return 0;
+  char data[8192] = {0};
+  size_t count = fread(data, 1, sizeof(data) - 1, config);
+  fclose(config);
+  if (!count) return 0;
+  const char *key = strstr(data, "\"approved_resume_path\"");
+  if (!key) return 0;
+  const char *start = strchr(key + 23, '"');
+  if (!start) return 0;
+  start += 1;
+  const char *end = strchr(start, '"');
+  if (!end || (size_t)(end - start) >= output_size) return 0;
+  memcpy(output, start, (size_t)(end - start));
+  output[end - start] = '\0';
+  return output[0] != '\0';
+}
 
 static char *encode_base64(const unsigned char *data, size_t size) {
   size_t output_size = 4 * ((size + 2) / 3);
@@ -36,13 +62,14 @@ int main(void) {
   char payload[1048577];
   if (fread(payload, 1, length, stdin) != length) return 1;
   payload[length] = '\0';
-  const char *resume = "/Users/jiayiyao/Documents/Jiayi_Yao_resume.docx";
+  char resume[4096] = {0};
+  config_resume_path(resume, sizeof(resume));
   char target[2048] = {0};
-  FILE *queue = fopen("/Users/jiayiyao/Documents/Codex/2026-07-29/realtime-voice-chat-2/outputs/local-resume-companion-extension/attach-target-url.txt", "r");
+  FILE *queue = fopen(QUEUE_PATH, "r");
   if (queue) { fgets(target, sizeof(target), queue); fclose(queue); target[strcspn(target, "\r\n")] = '\0'; }
   int claim = strstr(payload, "claim-attachment") && target[0] && strstr(payload, target);
   char *reply = NULL;
-  if (claim && access(resume, R_OK) == 0) {
+  if (claim && resume[0] && access(resume, R_OK) == 0) {
     FILE *file = fopen(resume, "rb");
     if (file && fseek(file, 0, SEEK_END) == 0) {
       long size = ftell(file);
@@ -60,7 +87,7 @@ int main(void) {
       free(bytes);
       fclose(file);
     }
-    if (reply) unlink("/Users/jiayiyao/Documents/Codex/2026-07-29/realtime-voice-chat-2/outputs/local-resume-companion-extension/attach-target-url.txt");
+    if (reply) unlink(QUEUE_PATH);
   }
   if (!reply) reply = strdup("{\"error\":\"No matching approved resume attachment is queued\"}");
   uint32_t reply_length = (uint32_t)strlen(reply);
