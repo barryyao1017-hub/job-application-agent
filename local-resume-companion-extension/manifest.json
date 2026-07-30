@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Local Resume Companion",
+  "version": "0.1.0",
+  "description": "Attaches one approved local resume to a selected job-application resume field.",
+  "permissions": ["activeTab", "debugger", "nativeMessaging", "scripting"],
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "action": {
+    "default_title": "Attach approved resume",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [{"matches":["http://*/*", "https://*/*"],"js":["content.js"],"run_at":"document_idle","all_frames":true}]
+}
