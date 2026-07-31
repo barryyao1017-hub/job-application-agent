@@ -57,6 +57,16 @@ Some application forms are embedded in an iframe and use custom dropdowns. Treat
 5. If the exact education discipline is absent, select the closest truthful listed discipline. For a Data Science degree, prefer Mathematics, Computer Science, Statistics/Decision Theory, or another truthful related discipline before choosing Other.
 6. For years-of-experience dropdowns, never type a bare number and press Enter. Custom controls can match or retain an unintended default such as `0 years`. Instead, select the full visible range (for example, `1 - 2 year(s)`) and verify that exact range is displayed afterward.
 
+### Greenhouse custom-dropdown safeguards
+
+Greenhouse applications can render React-based dropdowns inside an embedded iframe while retaining hidden options from other controls in the DOM.
+
+1. Never press **Enter** to commit a Greenhouse dropdown selection. The key event can bubble to the form and trigger premature validation, leaving stale required-field errors even when selected values are displayed.
+2. Prefer clicking the exact visible option. If a reliable click is unavailable, use arrow keys only after confirming the focused option in the visible menu, then press **Tab** to commit it and close the menu.
+3. Target only options with visible on-screen bounds. Ignore hidden or zero-size options, including cached phone-country choices from other dropdowns.
+4. After the first required dropdown, immediately verify that the intended value is displayed, `aria-invalid` is not `true`, and no visible `This field is required` message appeared.
+5. If premature validation errors appear, stop filling additional fields. Reload and complete a clean pass before proceeding; never click the final Submit control merely to refresh validation.
+
 ## Handling incomplete profile information
 
 When the profile does not explicitly answer a question, use the review-stage inference defaults in `application-profile.md`. The user reviews all inferred values before submission, so a missing low-consequence detail is not itself a blocker.
