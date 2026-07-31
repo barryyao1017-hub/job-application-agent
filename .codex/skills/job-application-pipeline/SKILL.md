@@ -1,6 +1,6 @@
 ---
 name: job-application-pipeline
-description: "Orchestrate the local daily job-search pilot: discover recent LinkedIn ML/Data roles, apply documented company-specific routing policies, validate canonical ATS pages, deduplicate and score jobs, route eligible applications through saved-login or account-creation gates, delegate sequential application work, and report a privacy-minimal summary. Use for scheduled or manual discovery runs, queued application processing, login-gated applications, stale-claim recovery, and daily job-application summaries."
+description: "Orchestrate the local daily job-search pilot: discover recent LinkedIn ML/Data roles, apply documented company-specific routing policies, validate canonical ATS pages, deduplicate and score jobs, route eligible applications through strict existing-credential login gates, delegate sequential application work, and report a privacy-minimal summary. Use for scheduled or manual discovery runs, queued application processing, login-gated applications, stale-claim recovery, and daily job-application summaries."
 ---
 
 # Daily Job Application Pipeline
@@ -12,13 +12,13 @@ Run from the repository root. Treat `config.json`, `application-profile.md`, the
 - Act only as the orchestrator: recover state, discover and score roles, manage claims, route work, record lean worker results, and report the run.
 - Never interpret profile information, answer application questions, operate application forms, attach a résumé, or decide whether a form question is answerable.
 - Spawn one fresh `application-worker` for each claimed job and let it handle exactly that job. Process workers sequentially; never run two application assignments concurrently while Local Resume Companion uses its singleton attachment queue.
-- In the worker's initial prompt, explicitly invoke and require it to fully read `/Users/jiayiyao/.codex/skills/application-profile/SKILL.md` and `/Users/jiayiyao/.codex/skills/application-completion/SKILL.md`, including every file those skills directly require. Treat those skills as the authoritative sources for profile answers, completion behavior, escalation, and blocking.
+- In the worker's initial prompt, explicitly invoke and require it to fully read the repository-local `$application-completion` skill at `.agents/skills/application-completion/SKILL.md`, including every file it directly requires. Treat that skill and its required sources as authoritative for profile answers, completion behavior, escalation, and blocking.
 - Require the worker to fully read `references/login-gates.md` from this skill before interacting with an authentication gate. Treat it as authoritative for authentication only; the application profile and completion skill remain authoritative for form answers and completion.
 - Pass the worker only job-routing information: job ID, company, role, and application URL or opened tab. Do not summarize or reinterpret the profile, suggest answers, or add job-specific form-filling guidance.
 - Never click a final Submit button. The pilot ends at Review.
 - Never assign a job with `manual_review` status to an application worker.
-- Permit creation of ordinary job-site accounts only with the exact bot-owned email configured as `application_account_email` in `config.json`. Do not substitute the notification or profile email when that setting is absent.
-- Let Google Password Manager generate, retain, and autofill account passwords. Never read passwords from browser storage or write passwords, recovery answers, cookies, session tokens, or one-time codes to the ledger, artifacts, logs, prompts, or account registry.
+- At a login gate, allow only the two credential steps in `references/login-gates.md`: first the company-login credentials cache available to the agent, then—only when no applicable cached credential exists—the saved-login prompt provided by Google Chrome.
+- Never create an account, solicit or invent credentials, inspect secrets, or add another authentication fallback.
 - Send email only to the exact `notification_email` in `config.json`.
 - Never include contact data, demographic answers, authorization answers, résumé content, screenshots, or attachments in email.
 - Parallel agents may analyze descriptions only.
@@ -83,28 +83,16 @@ Use the returned `RUN_ID` for the remainder of the run. The CLI performs hard fi
 
 ### 4. Delegate applications sequentially
 
-Before the first application assignment, confirm that `config.json` provides:
-
-```json
-{
-  "application_account_email": "bot-owned email address",
-  "application_account_registry_path": "data/application-accounts.jsonl"
-}
-```
-
-The email must be an account the job-application bot is authorized to use. The registry is a private, append-only metadata log; it must not contain secrets. If either setting is absent, workers may reuse a visibly available Chrome session or saved login but must not create a new account.
-
 After each non-null claim, spawn a fresh `application-worker` with that job's routing information. Its prompt must say:
 
-> Use and fully read `$application-profile` at `/Users/jiayiyao/.codex/skills/application-profile/SKILL.md` and `$application-completion` at `/Users/jiayiyao/.codex/skills/application-completion/SKILL.md`, including every file they directly require. Also fully read `/Users/jiayiyao/Desktop/job-application-agent/.codex/skills/job-application-pipeline/references/login-gates.md` before handling authentication. Treat the login-gate reference as authoritative for authentication and the other two skills as authoritative for profile answers and completion. Process this one application through the final pre-submit state without submitting. Do not spawn other agents. Return the required structured result.
+> Use and fully read the repository-local `$application-completion` skill at `.agents/skills/application-completion/SKILL.md`, including every file it directly requires. Treat its required login-gate reference as authoritative for authentication and its other required sources as authoritative for profile answers and completion. Process this one application through the final pre-submit state without submitting. Do not spawn other agents. Return the required structured result.
 
 For a login gate, the worker must:
 
-1. Follow `references/login-gates.md` to reuse a signed-in session or Chrome-saved credential before attempting registration.
-2. Create an account with the configured bot-owned email only when no usable account is available and ordinary self-service registration is supported.
-3. Use Chrome's suggested strong password and allow Google Password Manager to retain it; never invent, transcribe, or persist a password itself.
-4. Append the required non-secret event to the configured account registry after an existing login succeeds, an account is created, or account creation becomes blocked.
-5. Return `blocked` for CAPTCHA, phone verification, inaccessible MFA or email verification, unavailable password-manager UI, or another unsupported authentication requirement. Recording a blocker must not stop the orchestrator from claiming the next eligible job.
+1. Check the company-login credentials cache available to the agent and use one applicable credential, such as the matching Google credential when available.
+2. Only if no applicable company credential is available, attempt the saved-login credential prompt provided by Google Chrome.
+
+If the applicable cached credential fails, or the Chrome prompt is unavailable, has no applicable credential, or fails, stop the login attempt and return `blocked` with `login_credentials_unavailable`. Do not create an account, solicit or invent credentials, or try another fallback. Recording this blocker must not stop the orchestrator from claiming the next eligible job.
 
 Then process the queue:
 

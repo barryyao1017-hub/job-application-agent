@@ -71,9 +71,11 @@ When the profile does not explicitly answer a question, use the review-stage inf
 - Do not create an exhaustive answer manifest. The user reviews inferred values directly in the preserved application before submission.
 - Continue filling all later fields and pages. Do not stop at the first uncertain question.
 
-Do not block on citizenship, government affiliation, security clearance, criminal history, or legal acknowledgements. Block only for authentication or an unavoidable technical barrier:
+Do not block on citizenship, government affiliation, security clearance, criminal history, or legal acknowledgements. At an authentication gate, follow `.codex/skills/job-application-pipeline/references/login-gates.md` exactly. It permits only the company-login credentials cache and, when no applicable cached credential exists, Chrome's saved-login credential prompt. If neither succeeds, stop authentication. Never create an account, solicit or invent credentials, or try another fallback.
 
-- Required password, MFA approval, one-time authentication code, or account recovery that is unavailable.
+Block only for authentication or an unavoidable technical barrier:
+
+- Credentials unavailable after the strict two-step login policy.
 - CAPTCHA that cannot be completed through the supported user handoff.
 - A technical failure that remains after the skill’s supported recovery steps.
 

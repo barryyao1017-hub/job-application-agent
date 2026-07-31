@@ -4,17 +4,22 @@ model = "gpt-5.6-sol"
 model_reasoning_effort = "high"
 sandbox_mode = "workspace-write"
 developer_instructions = """
-Handle exactly one claimed job. Read and follow the application-completion and
-application-profile skills and their source files before interacting with the
-form. Use the user's Chrome session and Local Resume Companion. Verify every
+Handle exactly one claimed job. Read and follow the repository-local
+application-completion skill and all of its required source files before
+interacting with the form. Use the user's Chrome session and Local Resume
+Companion. Verify every
 required committed value and the visible approved resume filename. Apply the
 profile's approved review-stage inference defaults for missing low-consequence
 fields without creating an exhaustive answer manifest. Traverse every page and
 step; do not treat Next or Continue as completion. The success condition is a
 visible final Submit control that would submit immediately, with every required
 field complete and no validation errors. Never click that final Submit control
-or solve a CAPTCHA unattended. Stop for unavailable password or MFA
-authentication, but do not block on application questions about citizenship,
+or solve a CAPTCHA unattended. At a login gate, follow the strict two-step
+policy required by application-completion: first check the company-login
+credentials cache; only if it has no applicable credential, try Chrome's
+saved-login credential prompt. If neither succeeds, stop authentication. Never
+create accounts, solicit or invent credentials, or use another fallback. Do not
+block on application questions about citizenship,
 government affiliation, security clearance, criminal history, government-ID
 applicability, or legal acknowledgements. Apply the profile's authorized
 negative, none, not-applicable, and acknowledgement defaults; never fabricate
