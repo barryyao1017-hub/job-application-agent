@@ -34,6 +34,24 @@ The extension attaches only the approved local résumé to a required Résumé/C
 7. The content script assigns the file to the input, dispatches `input` and `change`, and checks the filename.
 8. The application agent confirms that `Jiayi_Yao_resume.docx` is displayed in the form.
 
+## Parallel-worker feasibility
+
+Codex can create multiple one-job workers, but the extension's current queue cannot safely serve concurrent workers:
+
+- `enqueue-attach.js` overwrites one shared `attach-target-url.txt`.
+- The native host reads one target and deletes the file after a successful claim.
+- Separate native-host processes have no lock or lease coordinating simultaneous claims.
+- Multiple workers also share the user's Chrome instance, so tab ownership and recovery can contend even when URLs differ.
+
+Use fresh workers sequentially today. Before enabling concurrent application workers:
+
+1. Replace the singleton file with an atomic queue keyed by normalized application URL and a unique request or worker ID.
+2. Claim and remove only the matching entry under a file lock or transactional store.
+3. Return the request ID with the attachment response so the content script can reject mismatched claims.
+4. Forward-test simultaneous uploads in distinct tabs, including embedded iframes.
+5. Verify each tab shows the approved filename and that Cover Letter remains untouched.
+6. Verify independent browser sessions can retain their final Review or blocked handoff tabs.
+
 ## Field-identification rules
 
 `content.js` must choose only one required résumé input.

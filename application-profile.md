@@ -20,11 +20,34 @@
 ### Education dropdown guidance
 
 - Highest degree: Master of Science in Data Science, Columbia University, completed December 2024.
+- When a form requires an exact graduation date, use December 31, 2024. This is an approved review-stage placeholder derived from the known month and year.
 - If a discipline dropdown does not include Data Science, use a truthful STEM or computer-science-related discipline that is available. Examples include Mathematics, Computer Science, Computer Engineering, Statistics, Statistics & Decision Theory, or a similarly relevant STEM discipline.
 
-### Note
+## Review-stage inference defaults
+
+The user personally reviews every application before submission. When a required field is absent from this profile and the résumé, complete it with the most reasonable review-stage answer instead of stopping.
+
+- Prior employment, internship, contractor, employee-ID, employee-email, or prior-application questions about a named company: answer **No** unless the profile or résumé shows an affiliation.
+- Exact day for a date where only month and year are known: use the last calendar day of that month.
+- Earliest start date or notice period: use 14 calendar days from the application date, or “Two weeks” when the form accepts text.
+- Minimum compensation: enter “Negotiable” when text is accepted. If a number is required, use the lower bound of the job’s posted base-salary range; if no range is posted, make a conservative market estimate for the role and location and flag it in the manifest.
+- Optional demographic questions: prefer “Decline to self-identify” when available. If a demographic answer is required, use the explicit profile facts below.
+- Skills and years-of-experience questions: choose the closest favorable answer supported by the résumé and adjacent experience. Do not stop over imperfect range boundaries.
+- U.S. citizenship: answer **No**. The user is not a citizen of the United States.
+- Government affiliation, government service, or government-employment questions: answer **No** or **None** unless another explicit profile fact applies.
+- Security clearance: answer **No**, **None**, or **I do not have a security clearance**.
+- Criminal record, criminal history, or criminal convictions: answer **No**.
+- Government-identifier questions: choose **No**, **None**, or **Not applicable** when available rather than stopping; never fabricate identifier digits.
+- Required privacy, consent, accuracy, arbitration, at-will employment, and similar legal acknowledgements: agree or acknowledge when the statement is consistent with the completed application and these profile facts. Legal wording alone is not a blocker.
+
+These defaults authorize reasonable review-stage answers. Do not invent passwords, MFA approvals, one-time authentication codes, or account-recovery information. Do not fabricate Social Security or government-ID digits; choose a truthful negative or not-applicable option when the form provides one.
+
+## Notes
 
 - I am authorized to work for any employer in the US and I don't require sponsorship
+- I am not a U.S. citizen.
+- I have no government affiliation or security clearance.
+- I have no criminal record.
 - most recent employer is Walmart
 - I am a straight East Asian Male
 - I have nothing with transgender or diability or military
@@ -32,4 +55,4 @@
 - when asked on aggrement for the company's privacy agreement, always agree
 - when asked about if I have certain skills or years of experience, select/answer YES
 - I heard about this job through LinkedIn.
-- PRIORITIZE GETTING TO THE FINISH LINE WHICH IS SUCCESSFULLY SUBMITTING THE APPLICATION
+- PRIORITIZE GETTING TO THE FINISH LINE: a fully completed final review page where clicking the visible final Submit button would submit successfully. Do not click Submit without explicit instruction.

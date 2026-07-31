@@ -18,3 +18,11 @@ The native messaging manifest is generated from `native-host/com.local_resume_co
 The extension source is cross-platform, but the included installer currently supports macOS. Windows and Linux require an equivalent native-host registration script that uses the same generated manifest and points Chrome to the compiled native-host executable.
 
 For autonomous use, the application bot queues one exact target page with `node enqueue-attach.js "APPLICATION_URL"`. When that page contains one clearly labeled Resume/CV upload field, the extension attaches the approved résumé automatically. The instruction is consumed after one use.
+
+## Concurrency limitation
+
+The current attachment queue is a single file containing one URL. Each enqueue replaces the prior URL, and the native host consumes that instruction after one successful attachment.
+
+- Multiple one-job application workers are supported when they run sequentially.
+- Concurrent application workers are not safe: their enqueue operations can overwrite one another, attach to the wrong worker's timing window, or leave one form without a résumé.
+- Keep application-form workers sequential until the queue is redesigned as an atomic multi-entry queue or uses per-worker leases.

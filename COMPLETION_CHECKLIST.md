@@ -2,6 +2,29 @@
 
 Use this checklist for every job application before reporting that it is complete or ready for review.
 
+## Definition of complete
+
+An application is complete only when the worker has traversed every application page or step and reached the final pre-submit state:
+
+- The final **Submit**, **Submit Application**, or equivalent button is visible.
+- Clicking that button would submit the application immediately.
+- Every required field on every prior and current step has a committed value.
+- The approved résumé is visibly attached.
+- No visible validation errors remain.
+
+Seeing a **Next**, **Continue**, **Save and Continue**, or step-navigation control is proof that the application is not complete. Do not return a ready result from an intermediate page. Never click the final Submit button without explicit user instruction.
+
+## Multi-page traversal
+
+1. Identify the current step and the total or visible remaining steps.
+2. Fill and verify every required field on the current step.
+3. Click **Next**, **Continue**, or the equivalent non-submitting navigation control.
+4. Verify that the application advanced to a different step before continuing.
+5. Repeat until the final Submit button is visible.
+6. Revisit prior steps when the site exposes a review summary or when validation sends the form backward.
+
+Do not assume a form is single-page because only one page is initially visible. On Workday, Cisco, and similar systems, continue through all steps until the final Submit control is present.
+
 ## Strict completion check
 
 1. Identify every field marked required by the application.
@@ -11,6 +34,7 @@ Use this checklist for every job application before reporting that it is complet
 3. Confirm the approved résumé is attached and that its displayed filename matches the approved local résumé.
 4. Check that required acknowledgements, eligibility questions, and consent fields are selected.
 5. Review the completed form once more for visible required-field errors or blank required fields.
+6. Confirm the final Submit control is visible and enabled, but do not click it.
 
 ## Résumé attachment procedure
 
@@ -35,12 +59,37 @@ Some application forms are embedded in an iframe and use custom dropdowns. Treat
 
 ## Handling incomplete profile information
 
-When the profile does not explicitly answer a question, answer to the best of your ability using truthful, relevant context already available in the profile, résumé, and application materials.
+When the profile does not explicitly answer a question, use the review-stage inference defaults in `application-profile.md`. The user reviews all inferred values before submission, so a missing low-consequence detail is not itself a blocker.
 
 - Choose the closest accurate option when the form’s choices do not exactly match the profile.
-- Do not fabricate personal, legal, demographic, employment, education, or eligibility facts.
-- If no truthful answer or reasonably accurate option can be determined, clearly identify the exact field and ask the user for the minimum information needed.
+- Use the last calendar day when only a graduation month and year are known.
+- Default prior employment, prior internship/contractor status, prior employee ID/email, and prior application questions for a named company to **No** when no affiliation appears in the profile or résumé.
+- Use the profile’s approved start-date and compensation defaults when those fields are required.
+- Answer U.S. citizenship **No**, government affiliation **No/None**, security clearance **No/None**, and criminal history **No**.
+- Select **No/None/Not applicable** for government-identifier questions when available; never fabricate identifier digits.
+- Complete required legal and privacy acknowledgements using the profile defaults. Do not block merely because the wording is legal.
+- Do not create an exhaustive answer manifest. The user reviews inferred values directly in the preserved application before submission.
+- Continue filling all later fields and pages. Do not stop at the first uncertain question.
+
+Do not block on citizenship, government affiliation, security clearance, criminal history, or legal acknowledgements. Block only for authentication or an unavoidable technical barrier:
+
+- Required password, MFA approval, one-time authentication code, or account recovery that is unavailable.
+- CAPTCHA that cannot be completed through the supported user handoff.
+- A technical failure that remains after the skill’s supported recovery steps.
+
+If a site explicitly requires PDF, use an approved PDF derivative of the approved résumé only when the profile or local configuration provides one. Never certify that a PDF was uploaded while a DOCX is attached.
+
+## Preserve the live application
+
+The live browser tab is the review deliverable. Do not create a mandatory screenshot or answer manifest that duplicates it.
+
+1. For a ready application, keep the completed tab open as a deliverable.
+2. For an unresolved hard blocker, keep the tab open as a handoff with all committed progress intact.
+3. Before returning, finalize browser tabs with the application tab explicitly kept. Omit discovery, duplicate, and intermediate tabs.
+4. Return `review_tab_preserved: true` only after the tab has been kept successfully.
+5. If interrupted or recovering from a browser failure, preserve or reclaim the application tab before returning.
+6. Never close a completed or blocked application tab merely because the ledger result was recorded or the orchestrator is moving to another job.
 
 ## Submission rule
 
-Never submit the application unless the user explicitly instructs you to submit it. Leave it open and state any remaining unresolved fields precisely.
+Never submit the application unless the user explicitly instructs you to submit it. Leave the final pre-submit page open. A ready result means the user can review the page and click Submit without completing another field or visiting another step.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Company Application Policies"
+  short_description: "Apply company-specific application safeguards"
+  default_prompt: "Use $company-application-policies to handle a discovered role according to its company policy."

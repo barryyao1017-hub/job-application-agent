@@ -1,0 +1,4 @@
+interface:
+  display_name: "Daily Job Application Pipeline"
+  short_description: "Discover and prepare matched job applications"
+  default_prompt: "Use $job-application-pipeline to discover and prepare today’s matched job applications for review."
