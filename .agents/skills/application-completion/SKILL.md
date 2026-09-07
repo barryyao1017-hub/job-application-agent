@@ -13,7 +13,7 @@ Before interacting with the browser, fully read:
 
 - [`../../../application-profile.md`](../../../application-profile.md) for approved answers and review-stage inference defaults.
 - [`../../../COMPLETION_CHECKLIST.md`](../../../COMPLETION_CHECKLIST.md) for form traversal, résumé verification, completion criteria, tab preservation, and submission boundaries.
-- [`../../../.codex/skills/job-application-pipeline/references/login-gates.md`](../../../.codex/skills/job-application-pipeline/references/login-gates.md) for the strict authentication policy.
+- [`../job-application-pipeline/references/login-gates.md`](../job-application-pipeline/references/login-gates.md) for the strict authentication policy.
 
 Treat those files as authoritative. The login-gate reference controls authentication; the profile and completion checklist control application answers and completion.
 

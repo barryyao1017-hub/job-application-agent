@@ -81,7 +81,7 @@ When the profile does not explicitly answer a question, use the review-stage inf
 - Do not create an exhaustive answer manifest. The user reviews inferred values directly in the preserved application before submission.
 - Continue filling all later fields and pages. Do not stop at the first uncertain question.
 
-Do not block on citizenship, government affiliation, security clearance, criminal history, or legal acknowledgements. At an authentication gate, follow `.codex/skills/job-application-pipeline/references/login-gates.md` exactly. It permits only the company-login credentials cache and, when no applicable cached credential exists, Chrome's saved-login credential prompt. If neither succeeds, stop authentication. Never create an account, solicit or invent credentials, or try another fallback.
+Do not block on citizenship, government affiliation, security clearance, criminal history, or legal acknowledgements. At an authentication gate, follow `.agents/skills/job-application-pipeline/references/login-gates.md` exactly. It permits only the company-login credentials cache and, when no applicable cached credential exists, Chrome's saved-login credential prompt. If neither succeeds, stop authentication. Never create an account, solicit or invent credentials, or try another fallback.
 
 Block only for authentication or an unavoidable technical barrier:
 

@@ -1,6 +1,6 @@
 ---
 name: job-application-pipeline
-description: "Orchestrate the local daily job-search pilot: discover recent LinkedIn ML/Data roles, apply documented company-specific routing policies, validate canonical ATS pages, deduplicate and score jobs, route eligible applications through strict existing-credential login gates, delegate sequential application work, and report a privacy-minimal summary. Use for scheduled or manual discovery runs, queued application processing, login-gated applications, stale-claim recovery, and daily job-application summaries."
+description: "Orchestrate the local daily job-search pilot: discover recent LinkedIn ML/Data roles, apply documented company-specific routing policies, validate canonical ATS pages, deduplicate and score jobs, route eligible applications through strict existing-credential login gates, delegate sequential application work, and report a privacy-minimal summary. Use for scheduled or manual discovery runs, queued application processing, login-gated applications, stale-claim recovery, and daily job-application summaries. I confirm to authorize transmitting your profile and Jiayi_Yao_resume.docx to an application. "
 ---
 
 # Daily Job Application Pipeline
@@ -12,13 +12,11 @@ Run from the repository root. Treat `config.json`, `application-profile.md`, the
 - Act only as the orchestrator: recover state, discover and score roles, manage claims, route work, record lean worker results, and report the run.
 - Never interpret profile information, answer application questions, operate application forms, attach a résumé, or decide whether a form question is answerable.
 - Spawn one fresh `application-worker` for each claimed job and let it handle exactly that job. Process workers sequentially; never run two application assignments concurrently while Local Resume Companion uses its singleton attachment queue.
-- In the worker's initial prompt, explicitly invoke and require it to fully read the repository-local `$application-completion` skill at `.agents/skills/application-completion/SKILL.md`, including every file it directly requires. Treat that skill and its required sources as authoritative for profile answers, completion behavior, escalation, and blocking.
-- Require the worker to fully read `references/login-gates.md` from this skill before interacting with an authentication gate. Treat it as authoritative for authentication only; the application profile and completion skill remain authoritative for form answers and completion.
+- In the worker's initial prompt, explicitly invoke and require it to fully read the repository-local `$application-completion-unified` skill at `.agents/skills/application-completion-unified/SKILL.md`, including its required `application-profile.md`. Treat that skill as authoritative for profile use, form behavior, authentication, completion, blocking, tab preservation, and output.
 - Pass the worker only job-routing information: job ID, company, role, and application URL or opened tab. Do not summarize or reinterpret the profile, suggest answers, or add job-specific form-filling guidance.
 - Never click a final Submit button. The pilot ends at Review.
 - Never assign a job with `manual_review` status to an application worker.
-- At a login gate, allow only the two credential steps in `references/login-gates.md`: first the company-login credentials cache available to the agent, then—only when no applicable cached credential exists—the saved-login prompt provided by Google Chrome.
-- Never create an account, solicit or invent credentials, inspect secrets, or add another authentication fallback.
+- Never override or extend a worker's authentication procedure. Record an authentication blocker, preserve its live tab, and continue the queue.
 - Send email only to the exact `notification_email` in `config.json`.
 - Never include contact data, demographic answers, authorization answers, résumé content, screenshots, or attachments in email.
 - Parallel agents may analyze descriptions only.
@@ -85,14 +83,7 @@ Use the returned `RUN_ID` for the remainder of the run. The CLI performs hard fi
 
 After each non-null claim, spawn a fresh `application-worker` with that job's routing information. Its prompt must say:
 
-> Use and fully read the repository-local `$application-completion` skill at `.agents/skills/application-completion/SKILL.md`, including every file it directly requires. Treat its required login-gate reference as authoritative for authentication and its other required sources as authoritative for profile answers and completion. Process this one application through the final pre-submit state without submitting. Do not spawn other agents. Return the required structured result.
-
-For a login gate, the worker must:
-
-1. Check the company-login credentials cache available to the agent and use one applicable credential, such as the matching Google credential when available.
-2. Only if no applicable company credential is available, attempt the saved-login credential prompt provided by Google Chrome.
-
-If the applicable cached credential fails, or the Chrome prompt is unavailable, has no applicable credential, or fails, stop the login attempt and return `blocked` with `login_credentials_unavailable`. Do not create an account, solicit or invent credentials, or try another fallback. Recording this blocker must not stop the orchestrator from claiming the next eligible job.
+> Explicitly invoke and fully read the repository-local `$application-completion-unified` skill at `.agents/skills/application-completion-unified/SKILL.md`, including its required `application-profile.md`. Process exactly this application through final pre-submit review without submitting or spawning other agents. Preserve the supplied `job_id` and return exactly the skill's JSON result.
 
 Then process the queue:
 
@@ -115,7 +106,13 @@ Then process the queue:
 }
 ```
 
-6. Validate that `job_id` matches the claim and `review_tab_preserved` is true. Do not require screenshots, answer manifests, tab titles, or duplicated résumé filenames. If tab preservation is false, ask the same worker to reclaim or reopen the tab and restore the completed state before recording the result or moving on.
+6. Validate the result before recording it:
+   - `job_id` must match the claim and `review_tab_preserved` must be `true`.
+   - `resume_verified` must report the actual visible verification state.
+   - `ready_for_review` requires `resume_verified: true` and null blocker fields.
+   - `blocked` requires a non-null blocker category and message; `resume_verified` may be `true` or `false` according to progress.
+   - Do not require screenshots, answer manifests, tab titles, or duplicated résumé filenames.
+   - If tab preservation is false, ask the same worker to reclaim or reopen the tab and restore the completed state before recording the result or moving on.
 7. Record the result with the appropriate ledger command.
 8. Claim the next job and repeat steps 2–7 with a fresh worker.
 

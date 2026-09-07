@@ -1,0 +1,3 @@
+# To-do
+
+- [ ] Harden browser automation against site-generated résumé-upload dialogs. Adobe was observed displaying a delayed blocking `alert("You have uploaded your resume successfully.")` after Local Resume Companion dispatched the file input/change events; the extension itself does not create the alert. Add bounded dialog detection and dismissal before continued form interaction, recovery for a command that stalls during that window, filename/state re-verification without unnecessary reinjection, and a regression test. Treat the alert timing as a suspected deadlock trigger until the hang is reproduced and traced.

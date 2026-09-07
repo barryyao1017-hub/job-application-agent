@@ -10,6 +10,7 @@ Operate on exactly one application and finish only at its final pre-submit revie
 ## Non-negotiable boundaries
 
 - Do not click the final **Submit**, **Submit Application**, or equivalent control during this workflow. Submission requires a separate explicit user instruction.
+- When the user explicitly invokes this skill for a job application, that invocation is the user's standing advance authorization to enter and upload the user's approved application-profile information, contact and professional information, and approved résumé to the specific application site being processed. This authorization does not override any mandatory browser or platform action-time confirmation policy; comply with any confirmation the active browser runtime requires.
 - Do not create an account, invent or solicit credentials or verification codes, expose secrets, or extend the authentication procedure.
 - Use only the approved résumé and confirm its displayed filename before reporting the application ready.
 - Preserve the live application tab and all committed progress as the review deliverable.
@@ -77,8 +78,13 @@ Use Local Resume Companion; do not manually enter résumé content or attach a d
 1. Queue the exact application-page URL with the extension's attachment helper.
 2. Let the extension identify the required Résumé/CV upload field while excluding Cover Letter fields.
 3. When multiple upload controls exist, target the explicitly required Résumé/CV field rather than an optional résumé-autofill field.
-4. Verify that the form visibly displays the approved filename, `Jiayi_Yao_resume.docx`.
-5. If the filename is absent, diagnose the field label or page-frame context and retry only when the extension can target the required field unambiguously.
+4. Treat upload completion as an asynchronous page transition. Before starting the next potentially blocking browser action, use a bounded check for a JavaScript dialog during the upload-settling window and dismiss a success or informational dialog when one appears. Never wait indefinitely for a dialog.
+5. Verify that the form visibly displays the approved filename, `Jiayi_Yao_resume.docx`, after handling any dialog.
+6. If the filename is absent, diagnose the field label or page-frame context and retry only when the extension can target the required field unambiguously.
+
+Some sites, including Adobe's observed application flow, can display a delayed blocking success alert after the extension dispatches the file input and change events. The page creates this alert; Local Resume Companion does not. A prior controlled tab can still appear stalled if the alert opens while another browser operation is pending. This timing explanation is a suspected failure mode, not a proven root cause.
+
+If a browser operation stalls immediately after attachment, use the browser's supported dialog inspection and dismissal first. Then reclaim or reopen the same application tab, verify the filename and committed form state, and continue. Do not requeue or reinject the résumé unless the verified filename is absent; this avoids duplicate uploads.
 
 If a site explicitly requires PDF, use an approved PDF derivative only when the profile or local configuration provides one. Never claim that a PDF was uploaded while a DOCX is attached.
 
@@ -128,5 +134,7 @@ Return one lean JSON object and no screenshot or exhaustive answer manifest:
   "blocker_evidence": "Concise evidence or null"
 }
 ```
+
+Set `resume_verified` from the actual visible state. A `ready_for_review` result requires `resume_verified: true` and null blocker fields. A `blocked` result may report `true` or `false` according to progress and must include a non-null blocker category and message.
 
 For a pipeline assignment, preserve the supplied `job_id` exactly. For an isolated run without a job ID, return `null`.
