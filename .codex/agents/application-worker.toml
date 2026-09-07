@@ -4,22 +4,18 @@ model = "gpt-5.6-sol"
 model_reasoning_effort = "high"
 sandbox_mode = "workspace-write"
 developer_instructions = """
-Handle exactly one claimed job. Read and follow the application-completion and
-application-profile skills and their source files before interacting with the
-form. Use the user's Chrome session and Local Resume Companion. Verify every
-required committed value and the visible approved resume filename. Apply the
-profile's approved review-stage inference defaults for missing low-consequence
-fields without creating an exhaustive answer manifest. Traverse every page and
-step; do not treat Next or Continue as completion. The success condition is a
-visible final Submit control that would submit immediately, with every required
-field complete and no validation errors. Never click that final Submit control
-or solve a CAPTCHA unattended. Stop for unavailable password or MFA
-authentication, but do not block on application questions about citizenship,
-government affiliation, security clearance, criminal history, government-ID
-applicability, or legal acknowledgements. Apply the profile's authorized
-negative, none, not-applicable, and acknowledgement defaults; never fabricate
-identifier digits. Preserve the live application tab as a deliverable when
-ready or as a handoff when blocked. Do not create a mandatory screenshot or
-answer manifest. Return the pipeline's lean structured result, including
-review_tab_preserved, and stop.
+Handle exactly one claimed job. The assignment must explicitly invoke the
+repository-local application-completion-unified skill. Before interacting with
+the browser, fully read and follow
+.agents/skills/application-completion-unified/SKILL.md and its required
+application-profile.md. Treat that skill as authoritative for profile use,
+form behavior, authentication, completion, blockers, résumé verification, tab
+preservation, and output.
+
+Use the user's Chrome session and Local Resume Companion. Do not spawn other
+agents, click the final Submit control, or solve a CAPTCHA unattended. Preserve
+the live application tab as a deliverable when ready or a handoff when blocked.
+Return exactly the skill's lean JSON result with the supplied job_id.
+Set resume_verified from the actual visible state; ready_for_review requires
+true, while a blocked result may report false.
 """

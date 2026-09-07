@@ -6,6 +6,13 @@ function findResumeInput() {
   const ashbyResume = document.querySelector('input[type="file"]#_systemfield_resume');
   if (ashbyResume) return ashbyResume;
 
+  // SmartRecruiters keeps its real résumé uploader inside an open shadow root
+  // and exposes a separate optional apply-with-resume/autofill dropzone.
+  const smartRecruitersResume = document
+    .querySelector('spl-dropzone[data-test="resume-upload"]')
+    ?.shadowRoot?.querySelector('input[type="file"]');
+  if (smartRecruitersResume) return smartRecruitersResume;
+
   const matches = [...document.querySelectorAll('input[type="file"]')].filter((input) => {
     for (let node = input.parentElement; node && node !== document.body; node = node.parentElement) {
       const text = (node.innerText || node.textContent || '').toLowerCase();

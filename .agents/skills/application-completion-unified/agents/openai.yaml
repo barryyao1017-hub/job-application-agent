@@ -1,0 +1,6 @@
+interface:
+  display_name: "Unified Application Completion"
+  short_description: "Complete one application through pre-submit review"
+  default_prompt: "Use $application-completion-unified to complete one current or supplied job application through final pre-submit review without submitting."
+policy:
+  allow_implicit_invocation: false

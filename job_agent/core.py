@@ -16,7 +16,7 @@ DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.json"
 DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "job-agent.sqlite3"
 DEFAULT_COMPANY_POLICIES_PATH = (
     PROJECT_ROOT
-    / ".codex"
+    / ".agents"
     / "skills"
     / "company-application-policies"
     / "references"

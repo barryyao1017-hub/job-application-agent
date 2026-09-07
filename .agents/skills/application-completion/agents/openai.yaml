@@ -1,0 +1,4 @@
+interface:
+  display_name: "Application Completion"
+  short_description: "Complete one application without the pipeline"
+  default_prompt: "Use $application-completion to verify one application-worker change on the current job application without running the full pipeline or submitting."
