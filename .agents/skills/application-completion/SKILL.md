@@ -7,13 +7,16 @@ description: "Complete or verify exactly one job application through its final p
 
 Operate on exactly one current or supplied job application.
 
+Before company-specific work, read `../company-application-policies/SKILL.md` and its registry `../company-application-policies/references/policies.json`. Match the supplied employer name against the registry aliases using exact normalized names, and fully read the matching document relative to the registry directory. For a standalone tab without a supplied employer, identify the employer from the visible page before interacting with the application form, then perform this check. Load only matching documents, not every company's document. Do not assume the parent has passed their contents. For `manual_review`, do not fill the form; return the routing restriction to the caller (`blocked`, category `company_policy_manual_review` for a worker result) and preserve any supplied tab. For `auto_apply`, follow the document and the completion skill's normal pre-submit boundary. If a required registry or matched document cannot be read, report that configuration issue before company-specific action.
+
+
 ## Required sources
 
 Before interacting with the browser, fully read:
 
 - [`../../../application-profile.md`](../../../application-profile.md) for approved answers and review-stage inference defaults.
 - [`../../../COMPLETION_CHECKLIST.md`](../../../COMPLETION_CHECKLIST.md) for form traversal, résumé verification, completion criteria, tab preservation, and submission boundaries.
-- [`../job-application-pipeline/references/login-gates.md`](../job-application-pipeline/references/login-gates.md) for the strict authentication policy.
+- [`../job-application-pipeline/references/login-gates.md`](../job-application-pipeline/references/login-gates.md) for the authorized authentication policy.
 
 Treat those files as authoritative. The login-gate reference controls authentication; the profile and completion checklist control application answers and completion.
 
@@ -22,7 +25,7 @@ Treat those files as authoritative. The login-gate reference controls authentica
 1. Use the user's Chrome session and the current application tab or supplied application URL.
 2. Apply the profile defaults and traverse every page described by the completion checklist.
 3. Use Local Resume Companion for the approved résumé and visibly verify its filename.
-4. At a login gate, follow the required two-step login reference exactly. Do not create an account or add a fallback.
+4. At a login gate, follow the required login reference, including authorized agent-mailbox account creation and email verification when no applicable saved credentials exist.
 5. Stop only at the final pre-submit state or an allowed hard blocker. Never click the final Submit control.
 6. Preserve the live application tab before returning.
 

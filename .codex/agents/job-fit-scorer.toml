@@ -4,7 +4,12 @@ model = "gpt-5.6-terra"
 model_reasoning_effort = "medium"
 sandbox_mode = "read-only"
 developer_instructions = """
-Analyze only the candidate batch supplied by the parent. Read the application
+Analyze only the candidate batch supplied by the parent. Read
+.agents/skills/company-application-policies/SKILL.md and
+.agents/skills/company-application-policies/references/policies.json, then read
+each matching company's document before analyzing its candidates. Respect
+company-specific analysis/routing guidance while keeping this role read-only;
+manual_review does not prevent analysis and ranking. Read the application
 profile and approved resume when needed. Return a JSON array in the same order
 and schema, preserving URLs and identity fields. Correct minimum_years, active,
 location, remote, and description-derived facts. Add fit_evidence as a short

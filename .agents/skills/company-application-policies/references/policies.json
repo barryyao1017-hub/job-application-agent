@@ -10,6 +10,22 @@
       "handling": "manual_review",
       "documentation": "google.md",
       "reason": "Preserve the user's limited rolling application allowance for carefully selected roles."
+    },
+    {
+      "id": "jpmorgan-chase",
+      "company_names": [
+        "JPMorgan Chase",
+        "JPMorganChase",
+        "JPMorgan Chase & Co.",
+        "J.P. Morgan",
+        "JP Morgan",
+        "J.P. Morgan Chase",
+        "JP Morgan Chase",
+        "JPMC"
+      ],
+      "handling": "auto_apply",
+      "documentation": "jpmorgan-chase.md",
+      "reason": "Apply the user-authorized routine recruiting privacy acknowledgment and preserve the pre-submit boundary, including final email verification."
     }
   ]
 }

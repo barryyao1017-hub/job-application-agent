@@ -22,29 +22,13 @@ APPLICATION_WORKER = ROOT / ".codex" / "agents" / "application-worker.toml"
 
 
 class AgentInstructionTests(unittest.TestCase):
-    def test_login_gate_has_only_the_two_credential_paths(self) -> None:
-        instructions = LOGIN_GATES.read_text(encoding="utf-8")
-
-        self.assertIn("1. Check the company-login credentials cache", instructions)
-        self.assertIn(
-            "2. Only when no applicable company credential is available",
-            instructions,
-        )
-        self.assertIn(
-            "If the applicable cached credential fails, stop the login attempt",
-            instructions,
-        )
-        self.assertIn("Do not create accounts", instructions)
-
-        for removed_instruction in (
-            "application_account_email",
-            "application_account_registry_path",
-            "account_created",
-            "suggested strong password",
-            "self-service registration",
-        ):
-            with self.subTest(removed_instruction=removed_instruction):
-                self.assertNotIn(removed_instruction, instructions)
+    def test_login_reference_matches_unified_authentication_policy(self) -> None:
+        reference = LOGIN_GATES.read_text(encoding="utf-8")
+        unified = (UNIFIED_COMPLETION_SKILL / "SKILL.md").read_text(encoding="utf-8")
+        policy = unified.split("## 2. Pass authentication gates\n\n", 1)[1].split(
+            "## 3. Traverse", 1
+        )[0]
+        self.assertEqual(reference, "# Login gates\n\n" + policy.rstrip() + "\n")
 
     def test_legacy_application_completion_remains_available(self) -> None:
         skill = (LEGACY_COMPLETION_SKILL / "SKILL.md").read_text(encoding="utf-8")

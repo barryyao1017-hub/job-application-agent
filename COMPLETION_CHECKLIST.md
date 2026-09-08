@@ -40,8 +40,8 @@ Do not assume a form is single-page because only one page is initially visible. 
 
 Use the Local Resume Companion Chrome extension for résumé uploads. Do not manually enter résumé content or attach a different file.
 
-1. Queue the exact application-page URL with the extension's attachment helper.
-2. Allow the extension to identify the required Résumé/CV upload field. It must exclude Cover Letter fields.
+1. Queue the exact application document URL with the extension's attachment helper. For competing upload controls, use `enqueue-attach.js 'DOCUMENT_URL' --tab-id TAB_ID --frame-id FRAME_ID --selector 'CSS_SELECTOR'` after inspecting the intended field. Chrome frame 0 is the top-level document; use the companion popup for frame IDs and URLs. Optional `--shadow-hosts` takes a JSON array of open-shadow-host selectors from outermost to innermost.
+2. Automatic mode identifies the Résumé/CV field and excludes Cover Letter. Explicit mode uses only the selected unique enabled file input in the specified tab/frame, with no fallback if the target fails.
 3. On sites with more than one upload control, ensure the extension targets the explicitly required Résumé/CV field—not an optional autofill-from-résumé field.
 4. Verify that the form visibly displays the approved résumé filename, `Jiayi_Yao_resume.docx`, after attachment.
 5. If the filename is not displayed, do not report the application as complete. Diagnose the field labeling or page-frame context, then retry only after the extension can unambiguously target the required résumé field.
@@ -81,11 +81,11 @@ When the profile does not explicitly answer a question, use the review-stage inf
 - Do not create an exhaustive answer manifest. The user reviews inferred values directly in the preserved application before submission.
 - Continue filling all later fields and pages. Do not stop at the first uncertain question.
 
-Do not block on citizenship, government affiliation, security clearance, criminal history, or legal acknowledgements. At an authentication gate, follow `.agents/skills/job-application-pipeline/references/login-gates.md` exactly. It permits only the company-login credentials cache and, when no applicable cached credential exists, Chrome's saved-login credential prompt. If neither succeeds, stop authentication. Never create an account, solicit or invent credentials, or try another fallback.
+Do not block on citizenship, government affiliation, security clearance, criminal history, or legal acknowledgements. At an authentication gate, follow `.agents/skills/job-application-pipeline/references/login-gates.md` exactly. It checks cached credentials and Chrome saved logins first, then permits account creation using the connected agent-specific mailbox when neither offers applicable credentials. Email verification is authorized for existing logins and new accounts; follow the reference for mailbox identification, secure passwords, and bounded verification attempts.
 
 Block only for authentication or an unavoidable technical barrier:
 
-- Credentials unavailable after the strict two-step login policy.
+- Authentication unavailable after the authorized saved-login and agent-mailbox procedure.
 - CAPTCHA that cannot be completed through the supported user handoff.
 - A technical failure that remains after the skill’s supported recovery steps.
 
