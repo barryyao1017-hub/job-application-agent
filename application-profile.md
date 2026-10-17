@@ -4,7 +4,7 @@
 
 - Name:Jiayi Yao
 - Preferred name: Barry
-- Email:barryyao1017@gmail.com
+- Email: barrryyao@gmail.com
 - Phone:2018850624
 - Location:996 Belmont Ter, Sunnyvale, California, 94086
 - Links:https://www.linkedin.com/in/barryjiayiyao/

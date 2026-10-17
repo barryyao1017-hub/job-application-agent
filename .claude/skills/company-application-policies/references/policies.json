@@ -1,0 +1,15 @@
+{
+  "policies": [
+    {
+      "id": "google",
+      "company_names": [
+        "Google",
+        "Google LLC",
+        "Google DeepMind"
+      ],
+      "handling": "manual_review",
+      "documentation": "google.md",
+      "reason": "Preserve the user's limited rolling application allowance for carefully selected roles."
+    }
+  ]
+}

@@ -5,36 +5,25 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-LOGIN_GATES = (
-    ROOT
-    / ".agents"
-    / "skills"
-    / "job-application-pipeline"
-    / "references"
-    / "login-gates.md"
-)
-LEGACY_COMPLETION_SKILL = ROOT / ".agents" / "skills" / "application-completion"
-UNIFIED_COMPLETION_SKILL = (
-    ROOT / ".agents" / "skills" / "application-completion-unified"
-)
-PIPELINE_SKILL = ROOT / ".agents" / "skills" / "job-application-pipeline" / "SKILL.md"
-APPLICATION_WORKER = ROOT / ".codex" / "agents" / "application-worker.toml"
+CLAUDE = ROOT / ".claude"
+COMPLETION_SKILL = CLAUDE / "skills" / "application-completion" / "SKILL.md"
+PIPELINE_SKILL = CLAUDE / "skills" / "job-application-pipeline" / "SKILL.md"
+POLICIES_SKILL = CLAUDE / "skills" / "company-application-policies"
+APPLICATION_WORKER = CLAUDE / "agents" / "application-worker.md"
+FIT_SCORER = CLAUDE / "agents" / "job-fit-scorer.md"
 
 
 class AgentInstructionTests(unittest.TestCase):
-    def test_login_gate_has_only_the_two_credential_paths(self) -> None:
-        instructions = LOGIN_GATES.read_text(encoding="utf-8")
+    def test_login_gate_paths(self) -> None:
+        instructions = COMPLETION_SKILL.read_text(encoding="utf-8")
 
-        self.assertIn("1. Check the company-login credentials cache", instructions)
-        self.assertIn(
-            "2. Only when no applicable company credential is available",
-            instructions,
-        )
-        self.assertIn(
-            "If the applicable cached credential fails, stop the login attempt",
-            instructions,
-        )
-        self.assertIn("Do not create accounts", instructions)
+        self.assertIn("1. If the site already recognizes an existing signed-in session", instructions)
+        self.assertIn("2. Otherwise, use the agent-vault MCP server", instructions)
+        self.assertIn("call `login(account_id)` once", instructions)
+        self.assertIn("3. Otherwise, use Chrome's saved-login autofill", instructions)
+        self.assertIn("Never type a password or code yourself", instructions)
+        self.assertIn('blocker_category: "login_credentials_unavailable"', instructions)
+        self.assertIn("Do not create an account", instructions)
 
         for removed_instruction in (
             "application_account_email",
@@ -46,69 +35,53 @@ class AgentInstructionTests(unittest.TestCase):
             with self.subTest(removed_instruction=removed_instruction):
                 self.assertNotIn(removed_instruction, instructions)
 
-    def test_legacy_application_completion_remains_available(self) -> None:
-        skill = (LEGACY_COMPLETION_SKILL / "SKILL.md").read_text(encoding="utf-8")
-        metadata = (
-            LEGACY_COMPLETION_SKILL / "agents" / "openai.yaml"
-        ).read_text(
-            encoding="utf-8"
-        )
+    def test_completion_skill_is_self_contained(self) -> None:
+        skill = COMPLETION_SKILL.read_text(encoding="utf-8")
 
-        self.assertIn("name: application-completion", skill)
-        self.assertIn("without running the full discovery or application pipeline", skill)
-        self.assertIn("Operate on exactly one current or supplied job application", skill)
-        self.assertIn("$application-completion", metadata)
-
-        for required_source in (
-            ROOT / "application-profile.md",
-            ROOT / "COMPLETION_CHECKLIST.md",
-            LOGIN_GATES,
-        ):
-            with self.subTest(required_source=required_source):
-                self.assertTrue(required_source.is_file())
-
-    def test_unified_application_completion_is_explicit_and_self_contained(
-        self,
-    ) -> None:
-        skill = (UNIFIED_COMPLETION_SKILL / "SKILL.md").read_text(
-            encoding="utf-8"
-        )
-        metadata = (
-            UNIFIED_COMPLETION_SKILL / "agents" / "openai.yaml"
-        ).read_text(encoding="utf-8")
-
-        self.assertIn("name: application-completion-unified", skill)
+        self.assertIn("name: application-completion\n", skill)
         self.assertIn("Operate on exactly one application", skill)
         self.assertIn("../../../application-profile.md", skill)
-        self.assertIn("1. Check the company-login credentials cache", skill)
-        self.assertIn(
-            "2. Only when no applicable cached credential exists",
-            skill,
-        )
+        self.assertTrue((COMPLETION_SKILL.parent / "../../../application-profile.md").resolve().is_file())
+        self.assertIn("enqueue-attach.js", skill)
         self.assertIn(
             "ready_for_review` result requires `resume_verified: true",
             skill,
         )
         self.assertNotIn("COMPLETION_CHECKLIST.md", skill)
         self.assertNotIn("login-gates.md", skill)
-        self.assertIn("$application-completion-unified", metadata)
-        self.assertIn("allow_implicit_invocation: false", metadata)
 
-    def test_pipeline_and_worker_invoke_unified_completion(self) -> None:
+    def test_pipeline_and_worker_use_claude_completion_skill(self) -> None:
         pipeline = PIPELINE_SKILL.read_text(encoding="utf-8")
         worker = APPLICATION_WORKER.read_text(encoding="utf-8")
 
         for instructions in (pipeline, worker):
-            self.assertIn("application-completion-unified", instructions)
-            self.assertNotIn(
-                ".agents/skills/application-completion/SKILL.md",
-                instructions,
-            )
+            with self.subTest(instructions=instructions[:40]):
+                self.assertIn(".claude/skills/application-completion/SKILL.md", instructions)
+                self.assertNotIn(".agents/", instructions)
+                self.assertNotIn("$application-completion", instructions)
 
-        self.assertIn("$application-completion-unified", pipeline)
+        self.assertIn('subagent_type: "application-worker"', pipeline)
+        self.assertIn('subagent_type: "job-fit-scorer"', pipeline)
         self.assertNotIn("references/login-gates.md", pipeline)
         self.assertIn("resume_verified` may be `true` or `false", pipeline)
         self.assertIn("ready_for_review requires", worker)
+        self.assertIn("disallowedTools: Agent", worker)
+
+    def test_subagents_are_named_as_referenced(self) -> None:
+        self.assertIn("name: application-worker\n", APPLICATION_WORKER.read_text(encoding="utf-8"))
+        scorer = FIT_SCORER.read_text(encoding="utf-8")
+        self.assertIn("name: job-fit-scorer\n", scorer)
+        self.assertIn("tools: Read, Grep, Glob\n", scorer)
+
+    def test_policy_registry_documents_exist(self) -> None:
+        import json
+
+        registry = json.loads(
+            (POLICIES_SKILL / "references" / "policies.json").read_text(encoding="utf-8")
+        )
+        for policy in registry["policies"]:
+            with self.subTest(policy=policy["id"]):
+                self.assertTrue((POLICIES_SKILL / "references" / policy["documentation"]).is_file())
 
 
 if __name__ == "__main__":
