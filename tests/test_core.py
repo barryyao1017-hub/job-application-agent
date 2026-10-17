@@ -180,6 +180,19 @@ class CoreTests(unittest.TestCase):
                 result = score_candidate(value, self.cfg, now=NOW)
                 self.assertIn(expected, result.skip_reason or "")
 
+    def test_filters_use_word_boundaries(self) -> None:
+        internal = candidate(title="AI/ML Engineer, Internal Platforms")
+        self.assertIsNone(score_candidate(internal, self.cfg, now=NOW).skip_reason)
+
+        ml_software = candidate(
+            title="Software Engineer III, AI/ML, Google Cloud AI",
+            description="Python or C++ and end-to-end ML model deployment.",
+        )
+        self.assertIsNone(score_candidate(ml_software, self.cfg, now=NOW).skip_reason)
+
+        general = candidate(title="Software Engineer", description="Build email delivery services.")
+        self.assertIn("outside the ML", score_candidate(general, self.cfg, now=NOW).skip_reason or "")
+
     def test_atomic_claim_and_recovery(self) -> None:
         ingest_candidates(self.connection, [candidate()], self.run_id)
         score_jobs(self.connection, self.cfg, self.run_id, now=NOW)

@@ -4,6 +4,7 @@ import json
 import re
 import sqlite3
 import uuid
+from zoneinfo import ZoneInfo
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -50,7 +51,10 @@ MANAGEMENT_TITLE_TERMS = (
     "engineering manager",
     "data science manager",
 )
-INTERNSHIP_TITLE_TERMS = ("intern", "internship", "co-op", "coop")
+INTERNSHIP_TITLE_PATTERN = re.compile(r"\b(?:intern|internship|co-?op)\b")
+ML_SIGNAL_PATTERN = re.compile(
+    r"\b(?:ai|ml|machine learning|artificial intelligence|data science)\b"
+)
 CITIZENSHIP_TERMS = (
     "u.s. citizen required",
     "us citizen required",
@@ -260,7 +264,7 @@ def score_candidate(candidate: dict[str, Any], config: dict[str, Any], now: date
 
     if candidate.get("active") is False:
         return ScoreResult(0, [], "job is no longer active")
-    if any(term in title_lower for term in INTERNSHIP_TITLE_TERMS):
+    if INTERNSHIP_TITLE_PATTERN.search(title_lower):
         return ScoreResult(0, [], "internship or co-op role")
     if any(term in title_lower for term in MANAGEMENT_TITLE_TERMS):
         return ScoreResult(0, [], "management or director-level role")
@@ -280,10 +284,8 @@ def score_candidate(candidate: dict[str, Any], config: dict[str, Any], now: date
         return ScoreResult(0, [], "posting is outside the recency window")
 
     role_matches = [term for term in config["role_keywords"] if term.lower() in combined]
-    general_software = "software engineer" in title_lower and not any(
-        term in combined for term in ("machine learning", " ml ", "artificial intelligence", " ai ", "data science")
-    )
-    if general_software or not role_matches:
+    general_software = "software engineer" in title_lower and not ML_SIGNAL_PATTERN.search(combined)
+    if general_software or not (role_matches or ML_SIGNAL_PATTERN.search(title_lower)):
         return ScoreResult(0, [], "role is outside the ML and Data pilot")
 
     location_lower = location.lower()
@@ -701,6 +703,13 @@ def mark_notification(
         )
 
 
+def local_run_date(started_at: str, config: dict[str, Any]) -> str:
+    started = parse_datetime(started_at)
+    if started is None:
+        return started_at[:10]
+    return started.astimezone(ZoneInfo(config.get("timezone") or "UTC")).date().isoformat()
+
+
 def digest_payload(
     connection: sqlite3.Connection,
     config: dict[str, Any],
@@ -768,7 +777,7 @@ def digest_payload(
         "notification_key": key,
         "email": {
             "to": config["notification_email"],
-            "subject": f"Daily job application summary — {run['started_at'][:10]}",
+            "subject": f"Daily job application summary — {local_run_date(run['started_at'], config)}",
             "body": "\n".join(lines),
         },
         "counts": counts,
