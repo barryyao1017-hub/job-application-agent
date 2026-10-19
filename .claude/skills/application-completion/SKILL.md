@@ -11,7 +11,7 @@ Operate on exactly one application and finish only at its final pre-submit revie
 
 - Do not click the final **Submit**, **Submit Application**, or equivalent control during this workflow. Submission requires a separate explicit user instruction.
 - When the user explicitly invokes this skill for a job application, that invocation is the user's standing advance authorization to enter and upload the user's approved application-profile information, contact and professional information, and approved résumé to the specific application site being processed. This authorization does not override any mandatory browser or platform action-time confirmation policy; comply with any confirmation the active browser runtime requires.
-- Do not create an account, invent or solicit credentials or verification codes, expose secrets, or extend the authentication procedure.
+- Create an account only through agent-vault's `register` tool as described in section 2. Never invent, type, or solicit credentials or verification codes, open a verification email or link yourself, expose secrets, or extend the authentication procedure.
 - Use only the approved résumé and confirm its displayed filename before reporting the application ready.
 - Preserve the live application tab and all committed progress as the review deliverable.
 - Treat missing profile information as an inference task, not a blocker. Block only for authentication, CAPTCHA handoff failure, or an unavoidable technical barrier after supported recovery.
@@ -27,18 +27,30 @@ Use the user's Chrome session through the Claude in Chrome tools (`mcp__claude-i
 Use this procedure only when authentication is required to reach the application. Authentication never authorizes submission.
 
 1. If the site already recognizes an existing signed-in session in the user's Chrome, such as an active Google account offered through **Continue with Google**, use that session once. This is not a credential entry; do not type a password.
-2. Otherwise, use the agent-vault MCP server (`mcp__agent-vault__*`; load with ToolSearch if deferred). It fills the login form and any authenticator or emailed one-time code itself; you never see or type a secret.
-   1. Call `list_accounts` and pick the account whose `site_domain` matches the login page's domain or its parent domain (for example `myworkdayjobs.com` or `nvidia.wd5.myworkdayjobs.com`). If none matches, go to step 3.
+2. Otherwise, use the agent-vault MCP server (`mcp__agent-vault__*`; load with ToolSearch if deferred). It fills the login form and any authenticator or emailed one-time code itself; you never see or type a secret. Pass `tab_hint` set to the application tab's hostname (for example `salesforce.wd12.myworkdayjobs.com`) on every `login`, `register`, `verify_email`, and `add_site_domain` call: without it agent-vault acts on whichever tab is visible in any window of the agent's Chrome, which can be another site's tab and yields misleading `account_exists` or `no_login_form` results.
+   1. Call `list_accounts` and pick the account whose `site_host` is the login page's hostname (on `myworkdaysite.com`, hostname plus `/recruiting/<company>` from the URL, such as `wd1.myworkdaysite.com/recruiting/snapchat`). On multi-company platforms (`myworkdayjobs.com`, `icims.com`, `taleo.net`, `oraclecloud.com`, `successfactors.com`) only an exact `site_host` match counts, because each company has its own account: an `nvidia.wd5.myworkdayjobs.com` login does not work on `amazon.wd5.myworkdayjobs.com`. Elsewhere, a matching `site_domain` is enough. If none matches, go to step 3.
    2. With the login page (username/password form, choosing **Sign in with email** or equivalent if the site offers several methods) open in the application tab, call `login(account_id)` once and act on its status:
       - `ok`: continue the application.
       - `origin_mismatch` while on the company's real login page on another domain: call `add_site_domain(account_id)` once, then retry `login` once if it returns `ok`.
       - `no_login_form`: navigate to the site's sign-in form and retry once.
       - `needs_approval`, `denied`, `2fa_unsupported`, or `error`: stop and block with `blocker_category: "login_credentials_unavailable"`, putting the status and message in `blocker_message`. For `error`, also run `uv --directory /Users/jiayiyao/Desktop/agent-vault run agent-vault doctor` and include its summary.
 3. Otherwise, use Chrome's saved-login autofill for the authentication origin. Use at most one matching saved login without revealing its secret, and attempt it once.
+4. Otherwise, if the site offers account creation (**Create Account**, **Sign Up**, **Register**), create the account with agent-vault. It fills the configured email and a generated password, saves the login to Bitwarden before submitting, and opens verification links itself.
+   1. Open the site's create-account page in the application tab.
+   2. Fill every field that is neither the email nor a password from the profile, such as first and last name, country, phone, and the terms or privacy consent box. Leave the email and password fields empty for agent-vault.
+   3. Call `register()` once and act on its status:
+      - `ok`: if the site now shows a sign-in form, call `login(account_id)` once with the account id from the message, handling its status as in step 2. Then continue the application.
+      - `verify_email`: call `verify_email(account_id)` once. It waits for the email, opens the link in a separate tab, and leaves the application tab alone. On `ok`, return to the application tab, open the sign-in page if the site asks, and call `login(account_id)` once as in step 2.
+      - `account_exists` naming a vault account: sign in with that account as in step 2.
+      - `account_exists` because the site says the email is already registered: stop. agent-vault does not know that password.
+      - `no_signup_form`: open the create-account page, not the sign-in page, and retry once.
+      - `signup_rejected`: fix the fields the message names, then call `register()` once more.
+      - `needs_approval`, `denied`, `origin_mismatch`, or `error`: stop, as in step 2.
+   4. `verify_email` returning `not_found` or `error` also stops.
 
-If no path is available or the attempts fail, stop and return `blocked` with `blocker_category: "login_credentials_unavailable"`. When no agent-vault account matched, name the exact login domain in `blocker_message` so the user can add a login for it to the Bitwarden folder "agent". Never type a password or code yourself; agent-vault is the only credential source.
+If no path is available or the attempts fail, stop and return `blocked` with `blocker_category: "login_credentials_unavailable"`, putting the last agent-vault status and message in `blocker_message`. When the site offers no account creation (for example, sign-in only through a company SSO), name the exact login domain in `blocker_message` so the user can add a login for it to the Bitwarden folder "agent". Never type a password or code yourself; agent-vault is the only credential source.
 
-Do not open registration, attempt account or credential recovery, inspect secrets, or try another authentication fallback. Preserve the tab and committed progress so a pipeline orchestrator can continue to the next application.
+Do not attempt account or credential recovery, read verification emails, inspect secrets, or try another authentication fallback. Preserve the tab and committed progress so a pipeline orchestrator can continue to the next application.
 
 ## 3. Traverse every application step
 
@@ -113,7 +125,7 @@ Review the completed form once more. Do not use the final Submit control to trig
 
 The only allowed hard blockers are:
 
-- Credentials unavailable after the authentication procedure (existing session, agent-vault, saved login).
+- Credentials unavailable after the authentication procedure (existing session, agent-vault login, saved login, agent-vault account creation).
 - A CAPTCHA that cannot be completed through the supported user handoff.
 - A technical failure that remains after the supported recovery steps.
 

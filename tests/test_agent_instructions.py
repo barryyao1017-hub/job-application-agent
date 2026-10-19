@@ -23,7 +23,12 @@ class AgentInstructionTests(unittest.TestCase):
         self.assertIn("3. Otherwise, use Chrome's saved-login autofill", instructions)
         self.assertIn("Never type a password or code yourself", instructions)
         self.assertIn('blocker_category: "login_credentials_unavailable"', instructions)
-        self.assertIn("Do not create an account", instructions)
+        self.assertIn("4. Otherwise, if the site offers account creation", instructions)
+        self.assertIn("Call `register()` once", instructions)
+        self.assertIn("call `verify_email(account_id)` once", instructions)
+        self.assertIn("Create an account only through agent-vault's `register` tool", instructions)
+        self.assertIn("only an exact `site_host` match counts", instructions)
+        self.assertNotIn("Do not open registration", instructions)
 
         for removed_instruction in (
             "application_account_email",
@@ -34,6 +39,12 @@ class AgentInstructionTests(unittest.TestCase):
         ):
             with self.subTest(removed_instruction=removed_instruction):
                 self.assertNotIn(removed_instruction, instructions)
+
+    def test_scheduled_run_may_create_accounts(self) -> None:
+        script = (ROOT / "scripts" / "run-automation.sh").read_text(encoding="utf-8")
+
+        self.assertIn("mcp__agent-vault__register", script)
+        self.assertIn("mcp__agent-vault__verify_email", script)
 
     def test_completion_skill_is_self_contained(self) -> None:
         skill = COMPLETION_SKILL.read_text(encoding="utf-8")

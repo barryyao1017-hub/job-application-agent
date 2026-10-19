@@ -1,7 +1,7 @@
 ---
 name: application-worker
 description: Execution worker that completes one claimed job application through its final Review page without submitting. Use only from the job-application-pipeline skill, one job at a time.
-model: opus
+model: sonnet
 disallowedTools: Agent
 ---
 

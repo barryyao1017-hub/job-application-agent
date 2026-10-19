@@ -37,6 +37,6 @@ The work is split between a deterministic Python ledger and LLM instructions:
 
 ## Rules
 
-- Never click a final Submit control, create accounts, or type passwords; see the completion skill's auth section.
+- Never click a final Submit control or type passwords. Accounts are created only through agent-vault's `register` tool, which generates the password and saves it to Bitwarden; see the completion skill's auth section.
 - Email only `notification_email` from `config.json`, and never include contact, demographic, authorization or résumé content.
 - `tests/test_agent_instructions.py` pins key phrases in the skills and agents; update it alongside instruction changes.

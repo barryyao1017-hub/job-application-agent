@@ -193,6 +193,17 @@ class CoreTests(unittest.TestCase):
         general = candidate(title="Software Engineer", description="Build email delivery services.")
         self.assertIn("outside the ML", score_candidate(general, self.cfg, now=NOW).skip_reason or "")
 
+    def test_state_abbreviation_location_terms(self) -> None:
+        cfg = {**self.cfg, "preferred_location_terms": [", ca", ", wa"]}
+        for location in ("San Mateo, CA", "Kirkland, WA"):
+            with self.subTest(location=location):
+                result = score_candidate(candidate(location=location), cfg, now=NOW)
+                self.assertIsNone(result.skip_reason)
+        for location in ("Toronto, Canada", "Vancouver, Washington DC area, Wakanda"):
+            with self.subTest(location=location):
+                result = score_candidate(candidate(location=location), cfg, now=NOW)
+                self.assertIn("location", result.skip_reason or "")
+
     def test_atomic_claim_and_recovery(self) -> None:
         ingest_candidates(self.connection, [candidate()], self.run_id)
         score_jobs(self.connection, self.cfg, self.run_id, now=NOW)

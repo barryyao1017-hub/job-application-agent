@@ -254,6 +254,14 @@ class ScoreResult:
     skip_reason: str | None = None
 
 
+def location_term_pattern(term: str) -> re.Pattern[str]:
+    """Match ``term`` as whole words, so ", ca" matches "San Mateo, CA" but not "Toronto, Canada"."""
+    term = term.lower()
+    start = r"\b" if term[:1].isalnum() else ""
+    end = r"\b" if term[-1:].isalnum() else ""
+    return re.compile(start + re.escape(term) + end)
+
+
 def score_candidate(candidate: dict[str, Any], config: dict[str, Any], now: datetime | None = None) -> ScoreResult:
     current = now or utc_now()
     title = str(candidate.get("title") or "").strip()
@@ -291,7 +299,8 @@ def score_candidate(candidate: dict[str, Any], config: dict[str, Any], now: date
     location_lower = location.lower()
     remote = bool(candidate.get("remote")) or "remote" in location_lower
     location_match = remote or any(
-        term.lower() in location_lower for term in config["preferred_location_terms"]
+        location_term_pattern(term).search(location_lower)
+        for term in config["preferred_location_terms"]
     )
     if location and not location_match:
         return ScoreResult(0, [], "location is outside California, Washington, or US remote")

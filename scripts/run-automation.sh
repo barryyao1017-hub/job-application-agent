@@ -21,7 +21,7 @@ case "$NAME" in
     MODEL="opus"
     TIMEOUT_MIN=100
     CHROME="--chrome"
-    TOOLS="$COMMON_TOOLS,Skill,Agent,SendMessage,WebFetch,Bash(python3 -m job_agent:*),Bash(node local-resume-companion-extension/enqueue-attach.js:*),mcp__claude-in-chrome,mcp__agent-vault__list_accounts,mcp__agent-vault__login,mcp__agent-vault__add_site_domain,Bash(uv --directory /Users/jiayiyao/Desktop/agent-vault run agent-vault doctor:*)"
+    TOOLS="$COMMON_TOOLS,Skill,Agent,SendMessage,WebFetch,Bash(python3 -m job_agent:*),Bash(node local-resume-companion-extension/enqueue-attach.js:*),mcp__claude-in-chrome,mcp__agent-vault__list_accounts,mcp__agent-vault__login,mcp__agent-vault__add_site_domain,mcp__agent-vault__register,mcp__agent-vault__verify_email,Bash(uv --directory /Users/jiayiyao/Desktop/agent-vault run agent-vault doctor:*)"
     PROMPT="Run the job-application-pipeline skill for today. This is the unattended scheduled weekday run: nobody is watching, so never wait for user input; record blockers and continue."
     open -ga "Google Chrome"
     sleep 15

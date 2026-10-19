@@ -16,8 +16,10 @@ function findResumeInput() {
   const matches = [...document.querySelectorAll('input[type="file"]')].filter((input) => {
     for (let node = input.parentElement; node && node !== document.body; node = node.parentElement) {
       const text = (node.innerText || node.textContent || '').toLowerCase();
-      if (/cover\s*letter/.test(text)) return false;
+      // Check r\u00e9sum\u00e9 before cover letter: Workday (e.g. Salesforce) labels one
+      // required upload "Resume/CV ... you can include a cover letter as well".
       if (/(resume|r\u00e9sum\u00e9|\bcv\b)/.test(text)) return true;
+      if (/cover\s*letter/.test(text)) return false;
     }
     return false;
   });
