@@ -13,6 +13,11 @@ function findResumeInput() {
     ?.shadowRoot?.querySelector('input[type="file"]');
   if (smartRecruitersResume) return smartRecruitersResume;
 
+  // iCIMS names its required CV upload explicitly and adds an optional
+  // "Supporting Documents" upload whose help text also mentions the CV.
+  const icimsResume = document.querySelector('input[type="file"][id="PortalProfileFields.Resume_File"]');
+  if (icimsResume) return icimsResume;
+
   const matches = [...document.querySelectorAll('input[type="file"]')].filter((input) => {
     for (let node = input.parentElement; node && node !== document.body; node = node.parentElement) {
       const text = (node.innerText || node.textContent || '').toLowerCase();
@@ -23,7 +28,10 @@ function findResumeInput() {
     }
     return false;
   });
-  return matches.length === 1 ? matches[0] : null;
+  if (matches.length === 1) return matches[0];
+  // Several résumé-labelled uploads: take the one the form marks required, if exactly one is.
+  const required = matches.filter((input) => input.required || input.getAttribute('aria-required') === 'true');
+  return required.length === 1 ? required[0] : null;
 }
 
 function makeFile(base64, fileName) {
