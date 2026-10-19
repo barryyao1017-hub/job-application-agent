@@ -8,7 +8,7 @@
 - Phone:2018850624
 - Location:996 Belmont Ter, Sunnyvale, California, 94086
 - Links:https://www.linkedin.com/in/barryjiayiyao/
-- Resume location: ~/Documents/Jiayi_Yao_resume.docx
+- Resume location: ~/Desktop/Jiayi_Yao_resume.pdf
 
 ## Target Roles
 

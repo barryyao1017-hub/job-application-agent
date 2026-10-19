@@ -12,6 +12,13 @@ application-profile.md. Treat that skill as authoritative for profile use,
 form behavior, authentication, completion, blockers, résumé verification, tab
 preservation, and output.
 
+Before operating the application, read
+.agents/skills/company-application-policies/SKILL.md and
+.agents/skills/company-application-policies/references/policies.json.
+Match the assigned company and fully read its registered document yourself;
+do not assume the parent loaded it for you. Apply manual_review restrictions
+before any form action, and follow matching auto_apply guidance through review.
+
 Use the user's Chrome session and Local Resume Companion. Do not spawn other
 agents, click the final Submit control, or solve a CAPTCHA unattended. Preserve
 the live application tab as a deliverable when ready or a handoff when blocked.

@@ -1,6 +1,6 @@
 ---
 name: job-application-pipeline
-description: "Orchestrate the local daily job-search pilot: discover recent LinkedIn ML/Data roles, apply documented company-specific routing policies, validate canonical ATS pages, deduplicate and score jobs, route eligible applications through strict existing-credential login gates, delegate sequential application work, and report a privacy-minimal summary. Use for scheduled or manual discovery runs, queued application processing, login-gated applications, stale-claim recovery, and daily job-application summaries. I confirm to authorize transmitting your profile and Jiayi_Yao_resume.docx to an application. "
+description: "Orchestrate the local daily job-search pilot: discover recent LinkedIn ML/Data roles, apply documented company-specific routing policies, validate canonical ATS pages, deduplicate and score jobs, route eligible applications through saved-login and agent-mailbox registration gates, delegate sequential application work, and report a privacy-minimal summary. Use for scheduled or manual discovery runs, queued application processing, login-gated applications, stale-claim recovery, and daily job-application summaries. I confirm to authorize transmitting your profile and Jiayi_Yao_resume.docx to an application. "
 ---
 
 # Daily Job Application Pipeline
@@ -13,7 +13,7 @@ Run from the repository root. Treat `config.json`, `application-profile.md`, the
 - Never interpret profile information, answer application questions, operate application forms, attach a résumé, or decide whether a form question is answerable.
 - Spawn one fresh `application-worker` for each claimed job and let it handle exactly that job. Process workers sequentially; never run two application assignments concurrently while Local Resume Companion uses its singleton attachment queue.
 - In the worker's initial prompt, explicitly invoke and require it to fully read the repository-local `$application-completion-unified` skill at `.agents/skills/application-completion-unified/SKILL.md`, including its required `application-profile.md`. Treat that skill as authoritative for profile use, form behavior, authentication, completion, blocking, tab preservation, and output.
-- Pass the worker only job-routing information: job ID, company, role, and application URL or opened tab. Do not summarize or reinterpret the profile, suggest answers, or add job-specific form-filling guidance.
+- Require every worker to independently read the company-policy registry and matching document before form work. Pass the worker only job-routing information: job ID, company, role, and application URL or opened tab. Do not summarize or reinterpret the profile, suggest answers, or add job-specific form-filling guidance.
 - Never click a final Submit button. The pilot ends at Review.
 - Never assign a job with `manual_review` status to an application worker.
 - Never override or extend a worker's authentication procedure. Record an authentication blocker, preserve its live tab, and continue the queue.
@@ -64,7 +64,7 @@ After writing the discovery file, run:
 python3 -m job_agent company-policies --input artifacts/YYYY-MM-DD/discovered.json
 ```
 
-For every match, invoke and fully read `$company-application-policies` and the exact documentation path returned by the command before enriching, routing, opening an application form, or delegating work for that company. Apply the company document's instructions. Company policies may narrow this pipeline's permissions but never widen them.
+For every match, invoke and fully read `$company-application-policies` and the exact documentation path returned by the command before enriching, routing, opening an application form, or delegating work for that company. Apply the company document's instructions. Company policies may document already-authorized routine actions and narrow routing, but never override browser confirmation requirements or authorize submission.
 
 ### 3. Enrich, ingest, and score
 
@@ -83,7 +83,7 @@ Use the returned `RUN_ID` for the remainder of the run. The CLI performs hard fi
 
 After each non-null claim, spawn a fresh `application-worker` with that job's routing information. Its prompt must say:
 
-> Explicitly invoke and fully read the repository-local `$application-completion-unified` skill at `.agents/skills/application-completion-unified/SKILL.md`, including its required `application-profile.md`. Process exactly this application through final pre-submit review without submitting or spawning other agents. Preserve the supplied `job_id` and return exactly the skill's JSON result.
+> Explicitly invoke and fully read the repository-local `$application-completion-unified` skill at `.agents/skills/application-completion-unified/SKILL.md`, including its required `application-profile.md`, company-policy registry, and matching company document. Process exactly this application through final pre-submit review without submitting or spawning other agents. Preserve the supplied `job_id` and return exactly the skill's JSON result.
 
 Then process the queue:
 

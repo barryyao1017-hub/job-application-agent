@@ -23,6 +23,14 @@ for target in \
   mkdir -p "$target"
   sed -e "s/EXTENSION_ID/$extension_id/" -e "s|NATIVE_HOST_PATH|$here/resume-native-host|" "$here/com.local_resume_companion.json" > "$target/com.local_resume_companion.json"
 done
-cc -O2 -DCONFIG_PATH=\"$config\" -DQUEUE_PATH=\"${root}/local-resume-companion-extension/attach-target-url.txt\" "$here/resume_native_host.c" -o "$here/resume-native-host"
+python3 - "$here" <<'PYTHON'
+import json, pathlib, subprocess, sys
+here = pathlib.Path(sys.argv[1])
+subprocess.run(['/usr/bin/clang', '-fobjc-arc', '-framework', 'Foundation',
+                '-DRESUME_ROOT=' + json.dumps(str(here.parent.parent)),
+                str(here / 'resume_native_host.m'), '-o', str(here / 'resume-native-host')], check=True)
+subprocess.run(['/usr/bin/codesign', '--force', '--sign', '-', '--identifier',
+                'com.local_resume_companion.host', str(here / 'resume-native-host')], check=True)
+PYTHON
 chmod 700 "$here/resume-native-host"
 echo "Native host installed."
