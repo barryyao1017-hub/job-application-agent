@@ -11,7 +11,7 @@ Run from the repository root. Invoking this skill, including from the scheduled 
 
 - Act only as the orchestrator: recover state, discover and score roles, manage claims, route work, record lean worker results, and report the run.
 - Never interpret profile information, answer application questions, operate application forms, attach a résumé, or decide whether a form question is answerable.
-- Use the Agent tool with `subagent_type: "application-worker"` to start one fresh worker for each claimed job and let it handle exactly that job. Process workers sequentially; never run two application assignments concurrently while Local Resume Companion uses its singleton attachment queue.
+- Use the Agent tool with `subagent_type: "application-worker"` to start one fresh worker for each claimed job and let it handle exactly that job. Process workers sequentially for now; the résumé attach step (`file_upload`) no longer requires it, but the Local Resume Companion fallback has a single-slot queue and concurrent Chrome tab ownership has not been forward-tested (see "Application-worker concurrency").
 - In the worker's initial prompt, require it to fully read and follow the repository-local `application-completion` skill at `.claude/skills/application-completion/SKILL.md`, including its required `application-profile.md`. Treat that skill as authoritative for profile use, form behavior, authentication, completion, blocking, tab preservation, and output.
 - Pass the worker only job-routing information: job ID, company, role, and application URL or opened tab. Do not summarize or reinterpret the profile, suggest answers, or add job-specific form-filling guidance.
 - Never click a final Submit button. The pilot ends at Review.
@@ -132,11 +132,16 @@ Reject malformed worker output and use SendMessage to ask the same worker to cor
 
 ### Application-worker concurrency
 
-Claude can run multiple one-job application workers, but the current Local Resume Companion is not safe for concurrent uploads: every enqueue overwrites one shared `attach-target-url.txt`, and the native host consumes that single instruction after one claim. Chrome-control sessions may also contend for the same user browser. Therefore:
+Claude can run multiple one-job application workers, and the default résumé attach step no longer forces sequencing: `mcp__claude-in-chrome__file_upload` reads the file per call and targets one `ref` in one `tabId`, with no shared state between workers. Two blockers remain before workers may run concurrently:
+
+- The Local Resume Companion fallback has a single-slot queue: every enqueue overwrites one shared `attach-target-url.txt`, and the native host consumes that single instruction after one claim. Two workers falling back at once would clobber each other.
+- Concurrent Chrome tab ownership has not been forward-tested. Each worker must pin its own `tabId` in every browser call, and that discipline has not yet been verified with two workers in the same Chrome.
+
+Therefore:
 
 - Use a fresh worker per job.
 - Run those workers sequentially.
-- Do not enable parallel form work until the extension supports an atomic multi-entry URL queue or per-worker leases and concurrent Chrome tab ownership has been forward-tested.
+- Do not enable parallel form work until the fallback is retired or given per-worker leases and concurrent tab ownership has been forward-tested.
 
 ### 5. Finish and summarize
 

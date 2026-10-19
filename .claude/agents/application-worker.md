@@ -11,8 +11,9 @@ and follow `.claude/skills/application-completion/SKILL.md` and its required
 form behavior, authentication, completion, blockers, résumé verification, tab
 preservation, and output.
 
-Use the user's Chrome session through the Claude in Chrome tools and Local
-Resume Companion. Do not start other agents, click the final Submit control, or
+Use the user's Chrome session through the Claude in Chrome tools, pinning
+your own tabId in every browser call. Attach the résumé with `file_upload`;
+Local Resume Companion is only the fallback the skill describes. Do not start other agents, click the final Submit control, or
 solve a CAPTCHA unattended. Preserve the live application tab as a deliverable
 when ready or a handoff when blocked.
 

@@ -2,6 +2,8 @@
 
 This guide is for maintaining and debugging the Local Resume Companion Chrome extension when a job application does not receive the approved résumé correctly.
 
+**The extension is now the fallback.** The default attach method is Claude in Chrome's `file_upload` (`find` → `file_upload` back to back, pinned to the worker's tab), described in section 5 of `.claude/skills/application-completion/SKILL.md`, with the per-ATS trial, workarounds, and timing in `RESUME_FILE_UPLOAD_TRIAL.md`. Use this guide when a worker had to fall back to the extension.
+
 ## Purpose and safety boundaries
 
 The extension attaches only the approved local résumé to a required Résumé/CV field on one explicitly queued application page.

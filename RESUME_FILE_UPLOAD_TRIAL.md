@@ -2,7 +2,7 @@
 
 Date: 2026-10-18. Browser: the agent's Chrome (debug port 9222, confirmed with the `?browser-check` tab). Tool: `mcp__claude-in-chrome__file_upload` (`ref`, `tabId`, `paths`). File: the approved résumé `Jiayi_Yao_resume.docx`. No other field was filled and nothing was submitted; all trial tabs were closed afterwards.
 
-Verdict: **not a drop-in replacement.** Ashby and hosted Greenhouse boards work with a plain `find` → `file_upload`. SmartRecruiters and embedded Greenhouse do not, because the accessibility tree that `find`/`read_page` expose never includes the file input (open shadow root, cross-origin iframe). Both have a verified workaround, so the extension can be retired once the skill prescribes those two extra steps. The skills were left unchanged per the task rule.
+Verdict: **not a drop-in replacement.** Ashby and hosted Greenhouse boards work with a plain `find` → `file_upload`. SmartRecruiters and embedded Greenhouse do not, because the accessibility tree that `find`/`read_page` expose never includes the file input (open shadow root, cross-origin iframe). Both have a verified workaround, so the extension can be retired once the skill prescribes those two extra steps. The skills were left unchanged by the trial itself; the user then decided to make `file_upload` the default with the extension as fallback, and section 5 of the completion skill now encodes the ladder below.
 
 ## Per-ATS results
 
@@ -73,3 +73,37 @@ Written so it can be dropped in once the path question above is settled:
 > 6. If the filename is absent, re-run `find`, confirm the ref is still the required input, and upload once more. Do not re-upload while the filename is visible.
 >
 > Local Resume Companion (`node local-resume-companion-extension/enqueue-attach.js URL`) remains available as a fallback; its single-slot queue means only one worker may use it at a time.
+
+## Timing
+
+Date: 2026-10-19, same agent Chrome (port 9222, `?browser-check` confirmed), same two pages as the trial above. Local Resume Companion was loaded in that Chrome (unpacked from the main checkout, extension id `mmljpimppaapdbpbnhgdhgfcmjdpicom`, native host registered for it), so both methods were timed. Wall-clock seconds, all clocks on the same machine.
+
+- **Method A (`file_upload`):** `t0` = `Date.now()` via `javascript_tool` immediately before `find`; then `find` for the required Résumé/CV input; then `file_upload` with `data/Jiayi_Yao_resume.docx` (a copy inside the worktree, since the tool refuses `~/Documents`); then a 250 ms in-page poll until `document.body.innerText` contains `Jiayi_Yao_resume.docx`. `t1` was recorded just before `file_upload`, so "find phase" = `t1 − t0` (the `find` call plus one model round trip) and "upload phase" = end − `t1`. The tab was reloaded between runs.
+- **Method B (extension):** a 250 ms poller was armed in the page first, then `Date.now()` was taken in the shell right before `node local-resume-companion-extension/enqueue-attach.js "<page URL>"` (the main checkout's copy, which is the one the loaded extension and native host read); end = the poller's first detection of the filename. Fresh tab per run. Cap 60 s; no run timed out.
+- On Ashby, the form is fetched after page load; both methods' clocks started only once `input#_systemfield_resume` existed.
+
+| Page | Method | Run | Seconds | Find phase | Upload phase |
+|---|---|---|---|---|---|
+| Greenhouse hosted (`cognitiv/jobs/4327598009`) | A `file_upload` | 1 | 6.585 | – | – |
+| Greenhouse hosted | A `file_upload` | 2 | 7.191 | 6.666 | 0.525 |
+| Greenhouse hosted | A `file_upload` | 3 | 7.844 | 7.311 | 0.533 |
+| Greenhouse hosted | B extension | 1 | 1.335 | | |
+| Greenhouse hosted | B extension | 2 | 0.705 | | |
+| Greenhouse hosted | B extension | 3 | 2.020 | | |
+| Ashby (`maintainx/…/application`) | A `file_upload` | 1 | 8.449 | 8.171 | 0.278 |
+| Ashby | A `file_upload` | 2 | 10.619 | 10.287 | 0.332 |
+| Ashby | A `file_upload` | 3 | 8.275 | 8.006 | 0.269 |
+| Ashby | B extension | 1 | 0.961 | | |
+| Ashby | B extension | 2 | 1.035 | | |
+| Ashby | B extension | 3 | 0.322 | | |
+
+| Page | Method | Median (s) | Mean (s) |
+|---|---|---|---|
+| Greenhouse hosted | A `file_upload` | 7.19 | 7.21 |
+| Greenhouse hosted | B extension | 1.34 | 1.35 |
+| Ashby | A `file_upload` | 8.45 | 9.11 |
+| Ashby | B extension | 0.96 | 0.77 |
+
+Discarded attempts (not in the table): one Greenhouse Method A attempt failed at `file_upload` with "Element is no longer in the document" because the ref from `find` went stale during the ~6 s round trip (the page re-rendered); the run was restarted from a reload. One Ashby Method A attempt was lost to a "connection lost" error from the browser tool before any action ran; also restarted.
+
+Interpretation: the extension attaches the file 5–9× sooner than `file_upload` on these pages, but almost none of that gap is upload work. `file_upload` itself takes 0.3–0.5 s from call to visible filename; the remaining 6–10 s per run is the `find` call (the accessibility-tree query against the whole form, slower on Ashby's longer form) plus the model round trip between `find` and `file_upload`. The extension skips both because its content script already knows the selector and polls every 1.5 s, so its cost is one poll interval plus the native-host read (0.3–2.0 s, median about 1 s). In a real worker the `find` is usually not an extra step, since the worker has to locate the field anyway to choose the required input over Cover Letter and Ashby's autofill input, so the practical penalty of switching is closer to the ~0.5 s upload phase plus one tool call, not the full 7–8 s. The stale-ref failure is the more important cost: a ref obtained seconds earlier can expire on pages that re-render, so the skill should `find` and `file_upload` back to back (ideally in one `browser_batch`) and retry once on "no longer in the document".

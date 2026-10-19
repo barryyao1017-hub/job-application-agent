@@ -43,6 +43,20 @@ class AgentInstructionTests(unittest.TestCase):
         self.assertIn("../../../application-profile.md", skill)
         self.assertTrue((COMPLETION_SKILL.parent / "../../../application-profile.md").resolve().is_file())
         self.assertIn("enqueue-attach.js", skill)
+        self.assertIn("Attach the approved résumé with `mcp__claude-in-chrome__file_upload`", skill)
+        self.assertIn("Local Resume Companion is the fallback", skill)
+        self.assertIn("Read `approved_resume_path` from `config.json`", skill)
+        self.assertIn("this worker's own `tabId`", skill)
+        self.assertIn("in one `browser_batch` where possible", skill)
+        self.assertIn('"Element is no longer in the document", re-run `find` and `file_upload` once', skill)
+        self.assertIn("never a Cover Letter input", skill)
+        self.assertIn("`input#_systemfield_resume`", skill)
+        self.assertIn("`apply-with-resume-container` dropzone", skill)
+        self.assertIn('`spl-dropzone[data-test="resume-upload"]`', skill)
+        self.assertIn("`iframe#grnhse_iframe`", skill)
+        self.assertIn("Fall back to Local Resume Companion only when", skill)
+        self.assertIn("The extension's queue is single-slot", skill)
+        self.assertIn("Report `resume_verified: true` only then", skill)
         self.assertIn(
             "ready_for_review` result requires `resume_verified: true",
             skill,
@@ -66,6 +80,21 @@ class AgentInstructionTests(unittest.TestCase):
         self.assertIn("resume_verified` may be `true` or `false", pipeline)
         self.assertIn("ready_for_review requires", worker)
         self.assertIn("disallowedTools: Agent", worker)
+        self.assertIn("Attach the résumé with `file_upload`", worker)
+        self.assertIn("pinning\nyour own tabId", worker)
+
+    def test_worker_concurrency_blockers_are_named(self) -> None:
+        pipeline = PIPELINE_SKILL.read_text(encoding="utf-8")
+        claude_md = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+
+        self.assertIn("Process workers sequentially for now", pipeline)
+        self.assertIn("no longer requires it", pipeline)
+        self.assertIn("no longer forces sequencing", pipeline)
+        self.assertIn("single-slot queue", pipeline)
+        self.assertIn("has not been forward-tested", pipeline)
+        self.assertNotIn("singleton attachment queue", pipeline)
+        self.assertIn("now the **fallback** attach path", claude_md)
+        self.assertIn("`file_upload` first and Local Resume Companion as the fallback", claude_md)
 
     def test_subagents_are_named_as_referenced(self) -> None:
         self.assertIn("name: application-worker\n", APPLICATION_WORKER.read_text(encoding="utf-8"))
