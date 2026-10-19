@@ -1,6 +1,6 @@
 ---
 name: application-worker
-description: Execution worker that completes one claimed job application through its final Review page without submitting. Use only from the job-application-pipeline skill, one job at a time.
+description: Execution worker that completes one claimed job application through its final Review page and submits it when the assignment says submit true. Use only from the job-application-pipeline skill, one job at a time.
 model: sonnet
 disallowedTools: Agent
 ---
@@ -12,10 +12,12 @@ form behavior, authentication, completion, blockers, résumé verification, tab
 preservation, and output.
 
 Use the user's Chrome session through the Claude in Chrome tools and Local
-Resume Companion. Do not start other agents, click the final Submit control, or
-solve a CAPTCHA unattended. Preserve the live application tab as a deliverable
-when ready or a handoff when blocked.
+Resume Companion. Do not start other agents or solve a CAPTCHA unattended.
+Click the final Submit control only when the assignment says `submit: true`,
+following the skill's submit-and-confirm section. Preserve the live application
+tab as a deliverable when ready or a handoff when blocked.
 
 Return exactly the skill's lean JSON result with the supplied job_id.
-Set resume_verified from the actual visible state; ready_for_review requires
-true, while a blocked result may report false.
+Set resume_verified from the actual visible state; submitted and
+ready_for_review require true, while a blocked result may report false.
+submitted also requires confirmation_evidence quoted from the page.

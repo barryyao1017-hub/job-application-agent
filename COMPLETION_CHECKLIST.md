@@ -12,7 +12,7 @@ An application is complete only when the worker has traversed every application 
 - The approved résumé is visibly attached.
 - No visible validation errors remain.
 
-Seeing a **Next**, **Continue**, **Save and Continue**, or step-navigation control is proof that the application is not complete. Do not return a ready result from an intermediate page. Never click the final Submit button without explicit user instruction.
+Seeing a **Next**, **Continue**, **Save and Continue**, or step-navigation control is proof that the application is not complete. Do not return a ready result from an intermediate page. Click the final Submit button only when the assignment says `submit: true`.
 
 ## Multi-page traversal
 
@@ -34,7 +34,7 @@ Do not assume a form is single-page because only one page is initially visible. 
 3. Confirm the approved résumé is attached and that its displayed filename matches the approved local résumé.
 4. Check that required acknowledgements, eligibility questions, and consent fields are selected.
 5. Review the completed form once more for visible required-field errors or blank required fields.
-6. Confirm the final Submit control is visible and enabled, but do not click it.
+6. Confirm the final Submit control is visible and enabled. Click it only when the assignment says `submit: true`.
 
 ## Résumé attachment procedure
 
@@ -104,4 +104,4 @@ The live browser tab is the review deliverable. Do not create a mandatory screen
 
 ## Submission rule
 
-Never submit the application unless the user explicitly instructs you to submit it. Leave the final pre-submit page open. A ready result means the user can review the page and click Submit without completing another field or visiting another step.
+Submit only when the assignment says `submit: true`, following the submit-and-confirm section of `.claude/skills/application-completion/SKILL.md`: click Submit once, then report `submitted` only with visible confirmation text. Without `submit: true`, leave the final pre-submit page open; a ready result means the user can review the page and click Submit without completing another field or visiting another step.

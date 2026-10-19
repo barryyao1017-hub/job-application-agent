@@ -75,8 +75,36 @@ class AgentInstructionTests(unittest.TestCase):
         self.assertIn('subagent_type: "job-fit-scorer"', pipeline)
         self.assertNotIn("references/login-gates.md", pipeline)
         self.assertIn("resume_verified` may be `true` or `false", pipeline)
-        self.assertIn("ready_for_review requires", worker)
+        self.assertIn("ready_for_review require true", worker)
         self.assertIn("disallowedTools: Agent", worker)
+
+    def test_submission_is_gated_and_confirmed(self) -> None:
+        skill = COMPLETION_SKILL.read_text(encoding="utf-8")
+        pipeline = PIPELINE_SKILL.read_text(encoding="utf-8")
+        worker = APPLICATION_WORKER.read_text(encoding="utf-8")
+
+        self.assertIn("only when the assignment explicitly says `submit: true`", skill)
+        self.assertIn("never click it a second time for the same application", skill)
+        self.assertIn("Click the immediate final Submit control exactly once.", skill)
+        self.assertIn("Return `submitted` only with visible confirmation evidence.", skill)
+        self.assertIn("submission_unconfirmed", skill)
+        self.assertIn("identity verification such as an ID photo or selfie", skill)
+        self.assertIn("Replace `SUBMIT` with the claim's `submit` value.", pipeline)
+        self.assertIn("python3 -m job_agent submit --job-id", pipeline)
+        self.assertIn("Submission is the worker's job, never the orchestrator's.", pipeline)
+        self.assertIn("only when the assignment says `submit: true`", worker)
+        self.assertNotIn("Never click a final Submit button. The pilot ends at Review.", pipeline)
+
+    def test_pipeline_retro_todos_and_recruiter_check(self) -> None:
+        pipeline = PIPELINE_SKILL.read_text(encoding="utf-8")
+
+        self.assertIn("python3 -m job_agent report", pipeline)
+        self.assertIn("generalization improvement", pipeline)
+        self.assertIn("https://claude.ai/artifact/WSphNhTrrHRRg3DVgEKDhi", pipeline)
+        self.assertIn("### 6. Check Gmail for recruiter replies", pipeline)
+        self.assertIn("never reply to, label, archive, or forward a recruiter message", pipeline)
+        script = (ROOT / "scripts" / "run-automation.sh").read_text(encoding="utf-8")
+        self.assertIn("mcp__claude_ai_Gmail__search_threads", script)
 
     def test_subagents_are_named_as_referenced(self) -> None:
         self.assertIn("name: application-worker\n", APPLICATION_WORKER.read_text(encoding="utf-8"))

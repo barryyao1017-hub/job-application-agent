@@ -16,11 +16,14 @@ from job_agent.core import (
     extract_ats_job_id,
     ingest_candidates,
     load_company_policies,
+    load_config,
     mark_notification,
     match_company_policy,
+    outcome_report,
     recover_stale_claims,
     score_candidate,
     score_jobs,
+    submit_job,
 )
 
 
@@ -34,7 +37,7 @@ def config(resume: Path) -> dict:
         "daily_limit": 5,
         "recency_hours": 24,
         "minimum_fit_score": 70,
-        "review_only": True,
+        "submit_applications": True,
         "approved_resume_filename": "Jiayi_Yao_resume.docx",
         "role_keywords": ["machine learning engineer", "data scientist", "ranking"],
         "preferred_location_terms": ["california", "seattle", "remote"],
@@ -246,6 +249,70 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(blocked["status"], "blocked")
         self.assertEqual(blocked["blocker_category"], "captcha")
         self.assertEqual(blocked["blocker_message"], "CAPTCHA shown")
+
+    def test_submit_requires_switch_resume_and_evidence(self) -> None:
+        ingest_candidates(self.connection, [candidate()], self.run_id)
+        score_jobs(self.connection, self.cfg, self.run_id, now=NOW)
+        claimed = claim_next(self.connection, "worker-1")
+        kwargs = dict(
+            confirmation_url=claimed["application_url"],
+            evidence="Thank you for applying",
+            resume_verified=True,
+            submit_applications=True,
+        )
+        for override in (
+            {"submit_applications": False},
+            {"resume_verified": False},
+            {"evidence": "  "},
+        ):
+            with self.subTest(override=override):
+                with self.assertRaises(ValueError):
+                    submit_job(self.connection, claimed["id"], "worker-1", **{**kwargs, **override})
+        submitted = submit_job(self.connection, claimed["id"], "worker-1", **kwargs)
+        self.assertEqual(submitted["status"], "submitted")
+        self.assertEqual(submitted["confirmation_evidence"], "Thank you for applying")
+        self.assertIsNotNone(submitted["submitted_at"])
+
+    def test_outcome_report_rate_and_blockers(self) -> None:
+        ingest_candidates(
+            self.connection,
+            [
+                candidate(),
+                candidate(application_url="https://job-boards.greenhouse.io/acme/jobs/222222"),
+            ],
+            self.run_id,
+        )
+        score_jobs(self.connection, self.cfg, self.run_id, now=NOW)
+        first = claim_next(self.connection, "w")
+        submit_job(
+            self.connection,
+            first["id"],
+            "w",
+            confirmation_url=first["application_url"],
+            evidence="Application received",
+            resume_verified=True,
+            submit_applications=True,
+        )
+        second = claim_next(self.connection, "w")
+        block_job(self.connection, second["id"], "w", "captcha", "CAPTCHA shown")
+        report = outcome_report(self.connection, run_id=self.run_id)
+        self.assertEqual(report["attempted"], 2)
+        self.assertEqual(report["submitted_percent"], 50.0)
+        self.assertEqual(report["blockers"]["captcha"][0]["message"], "CAPTCHA shown")
+        self.assertEqual(report["ready_for_review"], [])
+        body = digest_payload(self.connection, self.cfg, self.run_id, now=NOW)["email"]["body"]
+        self.assertIn("Submitted 1 of 2 attempted applications (50.0%)", body)
+        self.assertIn("Blocked — captcha: 1", body)
+        self.assertNotIn("No applications were submitted", body)
+
+    def test_legacy_review_only_config_disables_submission(self) -> None:
+        import json
+
+        legacy = {k: v for k, v in self.cfg.items() if k != "submit_applications"}
+        legacy["review_only"] = True
+        path = self.root / "config.json"
+        path.write_text(json.dumps(legacy), encoding="utf-8")
+        self.assertFalse(load_config(path)["submit_applications"])
 
     def test_digest_is_idempotent(self) -> None:
         payload = digest_payload(self.connection, self.cfg, self.run_id, now=NOW)

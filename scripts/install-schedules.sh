@@ -10,8 +10,12 @@ LOGS="$HOME/Library/Logs/claude-automations"
 mkdir -p "$AGENTS" "$LOGS"
 
 # name|StartCalendarInterval dicts
+# The daily job pipeline is a Claude desktop scheduled task (job-application-pipeline-daily)
+# because it needs Chrome, Gmail and the to-do artifact; remove its old launchd job.
+launchctl bootout "gui/$(id -u)/com.jiayiyao.claude.job-pipeline" 2>/dev/null || true
+rm -f "$AGENTS/com.jiayiyao.claude.job-pipeline.plist"
+
 SCHEDULES=(
-  "job-pipeline|$(for d in 1 2 3 4 5; do echo "<dict><key>Weekday</key><integer>$d</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer></dict>"; done)"
   "google-l4-monitor|<dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict><dict><key>Hour</key><integer>17</integer><key>Minute</key><integer>0</integer></dict>"
   "weekly-ai-stock|<dict><key>Weekday</key><integer>6</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>"
 )

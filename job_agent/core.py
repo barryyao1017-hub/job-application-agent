@@ -97,7 +97,6 @@ def load_config(path: Path | str = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
         "daily_limit",
         "recency_hours",
         "minimum_fit_score",
-        "review_only",
         "approved_resume_filename",
         "role_keywords",
         "preferred_location_terms",
@@ -106,8 +105,10 @@ def load_config(path: Path | str = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
     missing = [key for key in required if key not in config]
     if missing:
         raise ValueError(f"Missing configuration keys: {', '.join(missing)}")
-    if config["review_only"] is not True:
-        raise ValueError("Pilot safety boundary requires review_only=true")
+    # Older configs carry only review_only; it maps to submit_applications=false.
+    config.setdefault("submit_applications", config.get("review_only") is False)
+    if not isinstance(config["submit_applications"], bool):
+        raise ValueError("submit_applications must be true or false")
     resume_path = Path(config["approved_resume_path"]).expanduser()
     if not resume_path.is_file():
         raise ValueError(f"Approved resume does not exist: {resume_path}")
@@ -368,6 +369,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     resume_verified INTEGER NOT NULL DEFAULT 0,
     company_policy_id TEXT,
     company_policy_document TEXT,
+    submitted_at TEXT,
+    confirmation_evidence TEXT,
     updated_at TEXT NOT NULL
 );
 
@@ -398,7 +401,12 @@ def connect_db(path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     existing_columns = {
         row["name"] for row in connection.execute("PRAGMA table_info(jobs)").fetchall()
     }
-    for name in ("company_policy_id", "company_policy_document"):
+    for name in (
+        "company_policy_id",
+        "company_policy_document",
+        "submitted_at",
+        "confirmation_evidence",
+    ):
         if name not in existing_columns:
             connection.execute(f"ALTER TABLE jobs ADD COLUMN {name} TEXT")
     return connection
@@ -646,6 +654,107 @@ def complete_job(
     return dict(connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone())
 
 
+def submit_job(
+    connection: sqlite3.Connection,
+    job_id: str,
+    worker_id: str,
+    *,
+    confirmation_url: str,
+    evidence: str,
+    resume_verified: bool,
+    submit_applications: bool,
+) -> dict[str, Any]:
+    if not submit_applications:
+        raise ValueError("Submission is disabled: submit_applications is not true in config")
+    row = connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if row is None:
+        raise ValueError(f"Unknown job: {job_id}")
+    if row["status"] != "claimed" or row["claimed_by"] != worker_id:
+        raise ValueError("Job is not claimed by this worker")
+    if not resume_verified:
+        raise ValueError("Approved resume was not visibly verified")
+    if not evidence.strip():
+        raise ValueError("Submission requires visible confirmation evidence")
+    now = iso_utc()
+    connection.execute(
+        """
+        UPDATE jobs SET status='submitted', review_url=?, resume_verified=1,
+            submitted_at=?, confirmation_evidence=?,
+            claimed_by=NULL, claimed_at=NULL, updated_at=?
+        WHERE id=?
+        """,
+        (canonicalize_url(confirmation_url), now, evidence.strip(), now, job_id),
+    )
+    return dict(connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone())
+
+
+ATTEMPTED_STATUSES = ("submitted", "ready_for_review", "blocked")
+
+
+def outcome_report(
+    connection: sqlite3.Connection,
+    *,
+    run_id: str | None = None,
+    since: str | None = None,
+) -> dict[str, Any]:
+    """Summarize attempted applications: submission rate and blockers by category."""
+    clauses = [f"status IN ({','.join('?' for _ in ATTEMPTED_STATUSES)})"]
+    params: list[Any] = list(ATTEMPTED_STATUSES)
+    if run_id:
+        clauses.append("run_id=?")
+        params.append(run_id)
+    if since:
+        clauses.append("updated_at >= ?")
+        params.append(since)
+    rows = connection.execute(
+        f"""
+        SELECT id, company, title, status, blocker_category, blocker_message,
+            COALESCE(review_url, application_url) AS url, submitted_at,
+            confirmation_evidence
+        FROM jobs WHERE {' AND '.join(clauses)}
+        ORDER BY updated_at
+        """,
+        params,
+    ).fetchall()
+    counts = {status: 0 for status in ATTEMPTED_STATUSES}
+    blockers: dict[str, list[dict[str, Any]]] = {}
+    submitted = []
+    ready = []
+    for row in rows:
+        counts[row["status"]] += 1
+        if row["status"] == "submitted":
+            submitted.append(
+                {
+                    "job_id": row["id"],
+                    "company": row["company"],
+                    "title": row["title"],
+                    "submitted_at": row["submitted_at"],
+                    "confirmation_evidence": row["confirmation_evidence"],
+                }
+            )
+        elif row["status"] == "ready_for_review":
+            ready.append({"job_id": row["id"], "company": row["company"], "title": row["title"]})
+        elif row["status"] == "blocked":
+            blockers.setdefault(row["blocker_category"] or "uncategorized", []).append(
+                {
+                    "job_id": row["id"],
+                    "company": row["company"],
+                    "title": row["title"],
+                    "message": row["blocker_message"],
+                    "url": row["url"],
+                }
+            )
+    attempted = len(rows)
+    return {
+        "attempted": attempted,
+        "counts": counts,
+        "submitted_percent": round(100 * counts["submitted"] / attempted, 1) if attempted else None,
+        "submitted": submitted,
+        "ready_for_review": ready,
+        "blockers": blockers,
+    }
+
+
 def block_job(
     connection: sqlite3.Connection,
     job_id: str,
@@ -755,7 +864,7 @@ def digest_payload(
             COALESCE(review_url, application_url) AS url,
             company_policy_id
         FROM jobs
-        WHERE run_id=? AND status IN ('ready_for_review', 'blocked', 'manual_review')
+        WHERE run_id=? AND status IN ('submitted', 'ready_for_review', 'blocked', 'manual_review')
         ORDER BY fit_score DESC
         """,
         (run_id,),
@@ -763,7 +872,8 @@ def digest_payload(
     lines = [
         f"Daily job application run: {run_id}",
         f"Discovered: {sum(counts.values())}",
-        f"Ready: {counts.get('ready_for_review', 0)}",
+        f"Submitted: {counts.get('submitted', 0)}",
+        f"Ready for review (not submitted): {counts.get('ready_for_review', 0)}",
         f"Blocked: {counts.get('blocked', 0)}",
         f"Manual attention: {counts.get('manual_review', 0)}",
         f"Skipped: {counts.get('skipped', 0)}",
@@ -779,8 +889,17 @@ def digest_payload(
         lines.append(
             f"- {row['status']}: {row['company']} — {row['title']} — {row['url']}{policy}"
         )
+    outcomes = outcome_report(connection, run_id=run_id)
     lines.append("")
-    lines.append("No applications were submitted.")
+    if outcomes["attempted"]:
+        lines.append(
+            f"Submitted {outcomes['counts']['submitted']} of {outcomes['attempted']} "
+            f"attempted applications ({outcomes['submitted_percent']}%)."
+        )
+        for category, jobs in sorted(outcomes["blockers"].items()):
+            lines.append(f"Blocked — {category}: {len(jobs)}")
+    if not counts.get("submitted"):
+        lines.append("No applications were submitted.")
     return {
         "eligible": True,
         "notification_key": key,

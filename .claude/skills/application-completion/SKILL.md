@@ -1,16 +1,16 @@
 ---
 name: application-completion
-description: "Complete or verify exactly one current or supplied job application through its final pre-submit review state without submitting or running the full discovery pipeline. Use for an application-worker assignment, isolated worker-behavior check, recovery of one open application, or verification of a worker change against a current application tab or supplied application URL."
+description: "Complete exactly one current or supplied job application through its final pre-submit review state and, when the assignment says `submit: true`, submit it and confirm receipt, without running the full discovery pipeline. Use for an application-worker assignment, isolated worker-behavior check, recovery of one open application, or verification of a worker change against a current application tab or supplied application URL."
 ---
 
 # Application Completion
 
-Operate on exactly one application and finish only at its final pre-submit review state or an allowed hard blocker.
+Operate on exactly one application and finish at a confirmed submission (when the assignment says `submit: true`), at its final pre-submit review state (otherwise), or at an allowed hard blocker.
 
 ## Non-negotiable boundaries
 
-- Do not click the final **Submit**, **Submit Application**, or equivalent control during this workflow. Submission requires a separate explicit user instruction.
-- When the user explicitly invokes this skill for a job application, that invocation is the user's standing advance authorization to enter and upload the user's approved application-profile information, contact and professional information, and approved résumé to the specific application site being processed. This authorization does not override any mandatory browser or platform action-time confirmation policy; comply with any confirmation the active browser runtime requires.
+- Click the final **Submit**, **Submit Application**, or equivalent control only when the assignment explicitly says `submit: true` and every check in section 6 passes, following section 7. Without `submit: true` (for example an isolated verification run), stop at the final pre-submit state. Never click Submit to trigger or refresh validation, and never click it a second time for the same application.
+- When the user explicitly invokes this skill for a job application, that invocation is the user's standing advance authorization to enter and upload the user's approved application-profile information, contact and professional information, and approved résumé to the specific application site being processed and, when the assignment says `submit: true`, to submit that one application. This authorization does not override any mandatory browser or platform action-time confirmation policy; comply with any confirmation the active browser runtime requires.
 - Create an account only through agent-vault's `register` tool as described in section 2. Never invent, type, or solicit credentials or verification codes, open a verification email or link yourself, expose secrets, or extend the authentication procedure.
 - Use only the approved résumé and confirm its displayed filename before reporting the application ready.
 - Preserve the live application tab and all committed progress as the review deliverable.
@@ -121,15 +121,35 @@ Report `ready_for_review` only when all of the following are true:
 
 Review the completed form once more. Do not use the final Submit control to trigger or refresh validation.
 
-## 7. Handle blockers and preserve the tab
+## 7. Submit and confirm (only with `submit: true`)
+
+Skip this section unless the assignment says `submit: true`. Before clicking Submit, review the completed answers once more and stop at `ready_for_review` instead of submitting when any of these is true:
+
+- An answer contradicts `application-profile.md` or the résumé.
+- The form asks for a government identifier number, payment, a background-check authorization beyond a standard acknowledgement, or identity verification such as an ID photo or selfie.
+- The site warns that you have already applied to this role.
+
+Otherwise:
+
+1. Click the immediate final Submit control exactly once.
+2. Wait for the page to settle, then read it. A confirmation is visible on-page text or a status such as "Thank you for applying", "Application submitted", "We received your application", or the role listed as Submitted/Under review in the candidate portal. Record a short quote of it as `confirmation_evidence`.
+3. If Submit instead reveals validation errors, fix the named fields and click Submit once more only after every error is cleared; this counts as the same submission attempt because the first click was rejected. Stop after that second rejection.
+4. If a post-submit page asks optional questions (voluntary surveys, talent-community sign-up), leave them; the application is already in.
+5. If the result is ambiguous (a spinner, a generic page, a crash), do not click Submit again. Check the candidate portal or the role's page for an "Applied" state; if it still cannot be confirmed, block with `submission_unconfirmed`.
+
+Return `submitted` only with visible confirmation evidence. A rejected submission that could not be fixed returns `blocked` with `blocker_category: "submission_rejected"` and the site's error text in `blocker_evidence`.
+
+## 8. Handle blockers and preserve the tab
 
 The only allowed hard blockers are:
 
 - Credentials unavailable after the authentication procedure (existing session, agent-vault login, saved login, agent-vault account creation).
 - A CAPTCHA that cannot be completed through the supported user handoff.
 - A technical failure that remains after the supported recovery steps.
+- Identity verification (ID photo, selfie) the user must complete in person: `identity_verification_required`.
+- A submission that was rejected or cannot be confirmed (section 7): `submission_rejected` or `submission_unconfirmed`.
 
-For either a ready application or a blocker:
+For a submitted or ready application, or a blocker:
 
 1. Keep the application tab open with all committed progress intact.
 2. Finalize browser tabs with the application tab explicitly kept; omit discovery, duplicate, and intermediate tabs.
@@ -138,23 +158,24 @@ For either a ready application or a blocker:
 
 Do not close the application tab because a ledger result was recorded or an orchestrator is moving to another job. The live tab is the review deliverable.
 
-## 8. Return the result
+## 9. Return the result
 
 Return one lean JSON object and no screenshot or exhaustive answer manifest:
 
 ```json
 {
-  "status": "ready_for_review or blocked",
+  "status": "submitted, ready_for_review, or blocked",
   "job_id": "supplied job ID or null",
   "review_url": "URL",
   "resume_verified": true,
   "review_tab_preserved": true,
+  "confirmation_evidence": "Short quote of the on-page confirmation, or null",
   "blocker_category": "CATEGORY or null",
   "blocker_message": "MESSAGE or null",
   "blocker_evidence": "Concise evidence or null"
 }
 ```
 
-Set `resume_verified` from the actual visible state. A `ready_for_review` result requires `resume_verified: true` and null blocker fields. A `blocked` result may report `true` or `false` according to progress and must include a non-null blocker category and message.
+Set `resume_verified` from the actual visible state. A `submitted` result requires `resume_verified: true`, non-null `confirmation_evidence`, and null blocker fields; `review_url` is the confirmation page URL. A `ready_for_review` result requires `resume_verified: true` and null blocker fields. A `blocked` result may report `true` or `false` according to progress and must include a non-null blocker category and message.
 
 For a pipeline assignment, preserve the supplied `job_id` exactly. For an isolated run without a job ID, return `null`.

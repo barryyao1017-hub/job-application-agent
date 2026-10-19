@@ -21,8 +21,10 @@ from .core import (
     load_config,
     mark_notification,
     match_company_policy,
+    outcome_report,
     recover_stale_claims,
     score_jobs,
+    submit_job,
 )
 
 
@@ -56,6 +58,17 @@ def build_parser() -> argparse.ArgumentParser:
     complete.add_argument("--worker-id", required=True)
     complete.add_argument("--review-url", required=True)
     complete.add_argument("--resume-verified", action="store_true", required=True)
+
+    submit = subparsers.add_parser("submit")
+    submit.add_argument("--job-id", required=True)
+    submit.add_argument("--worker-id", required=True)
+    submit.add_argument("--confirmation-url", required=True)
+    submit.add_argument("--evidence", required=True)
+    submit.add_argument("--resume-verified", action="store_true", required=True)
+
+    report = subparsers.add_parser("report")
+    report.add_argument("--run-id")
+    report.add_argument("--since", help="ISO date or timestamp (UTC) on last update")
 
     block = subparsers.add_parser("block")
     block.add_argument("--job-id", required=True)
@@ -112,13 +125,10 @@ def main(argv: list[str] | None = None) -> int:
                     matches.append({"company": company, **match})
             emit({"matches": matches})
         elif args.command == "claim":
-            emit(
-                claim_next(
-                    connection,
-                    args.worker_id,
-                    config["company_policies_path"],
-                )
-            )
+            claimed = claim_next(connection, args.worker_id, config["company_policies_path"])
+            if claimed is not None:
+                claimed["submit"] = config["submit_applications"]
+            emit(claimed)
         elif args.command == "complete":
             emit(
                 complete_job(
@@ -129,6 +139,20 @@ def main(argv: list[str] | None = None) -> int:
                     resume_verified=args.resume_verified,
                 )
             )
+        elif args.command == "submit":
+            emit(
+                submit_job(
+                    connection,
+                    args.job_id,
+                    args.worker_id,
+                    confirmation_url=args.confirmation_url,
+                    evidence=args.evidence,
+                    resume_verified=args.resume_verified,
+                    submit_applications=config["submit_applications"],
+                )
+            )
+        elif args.command == "report":
+            emit(outcome_report(connection, run_id=args.run_id, since=args.since))
         elif args.command == "block":
             emit(
                 block_job(

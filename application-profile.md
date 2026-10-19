@@ -25,7 +25,7 @@
 
 ## Review-stage inference defaults
 
-The user personally reviews every application before submission. When a required field is absent from this profile and the résumé, complete it with the most reasonable review-stage answer instead of stopping.
+The pipeline may submit applications without a person reviewing them, so these defaults are what gets sent. When a required field is absent from this profile and the résumé, complete it with the most reasonable review-stage answer instead of stopping.
 
 - Prior employment, internship, contractor, employee-ID, employee-email, or prior-application questions about a named company: answer **No**
 - Exact day for a date where only month and year are known: use the last calendar day of that month.
@@ -55,4 +55,4 @@ DON'T BE SKIP BECAUSE YOU LACK INFORMATION. INFER!
 - when asked on aggrement for the company's privacy agreement, always agree
 - when asked about if I have certain skills or years of experience, select/answer YES
 - I heard about this job through LinkedIn.
-- PRIORITIZE GETTING TO THE FINISH LINE: a fully completed final review page where clicking the visible final Submit button would submit successfully. Do not click Submit without explicit instruction.
+- PRIORITIZE GETTING TO THE FINISH LINE: a fully completed final review page where clicking the visible final Submit button would submit successfully. Click Submit only when the assignment says `submit: true`.

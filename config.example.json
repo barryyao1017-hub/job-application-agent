@@ -9,7 +9,7 @@
   "recency_hours": 24,
   "minimum_fit_score": 70,
   "company_policies_path": ".claude/skills/company-application-policies/references/policies.json",
-  "review_only": true,
+  "submit_applications": false,
   "approved_resume_filename": "Jiayi_Yao_resume.docx",
   "role_keywords": [
     "machine learning engineer",
