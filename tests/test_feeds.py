@@ -429,7 +429,7 @@ class RegistryTests(unittest.TestCase):
                 load_registry(self.write(root, {"nope": 1}))
 
     def test_example_registry_is_valid_and_seeded(self) -> None:
-        entries = load_registry(ROOT / "data" / "company-registry.example.json")
+        entries = load_registry(ROOT / "company-registry.example.json")
         companies = {entry["company"]: entry for entry in entries}
         for company in ("NVIDIA", "Amazon", "Anthropic", "OpenAI", "Palantir", "Broadcom", "Salesforce"):
             self.assertIn(company, companies)
@@ -440,8 +440,9 @@ class RegistryTests(unittest.TestCase):
 
     def test_registry_file_is_private_but_example_is_tracked(self) -> None:
         ignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
-        self.assertIn("/data/*", ignore)
-        self.assertIn("!/data/company-registry.example.json", ignore)
+        self.assertIn("\n/data\n", ignore, "data/ stays untracked so the daily checkout can link it")
+        self.assertNotIn("company-registry", ignore)
+        self.assertTrue((ROOT / "company-registry.example.json").is_file(), "template lives at the repo root")
 
     def test_command_is_documented_and_allowed_in_scheduled_runs(self) -> None:
         self.assertIn("fetch-feeds", (ROOT / "CLAUDE.md").read_text(encoding="utf-8"))
