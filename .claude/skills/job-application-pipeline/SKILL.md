@@ -28,7 +28,7 @@ Run from the repository root. Invoking this skill, including from the scheduled 
 
 1. Run `python3 -m job_agent recover-stale-claims`.
 2. Create `artifacts/YYYY-MM-DD/` for private run artifacts.
-3. Stop after 90 minutes even if queued work remains.
+3. Stop after 90 minutes even if queued work remains. Jobs still `queued` stay queued and are claimed first by the next run.
 
 ### 2. Discover recent roles
 
@@ -56,7 +56,7 @@ It pulls the Greenhouse, Lever, Ashby, Workday and Amazon job boards listed in `
 }
 ```
 
-Put the per-board stats it prints (`fetched`, `kept`, `errors`) in the run summary. A board that errors is a note in the summary, not a run blocker. If the command itself fails or the registry is missing, record that as the discovery blocker, skip steps 3 and 4, and continue with sections 5–7.
+It also starts the run and records in the ledger which companies were checked, how many postings each board returned, and how many it kept; it prints the `run_id` and `companies_checked`. Use that `RUN_ID` for the remainder of the run. Put the per-board stats it prints (`fetched`, `kept`, `errors`) in the run summary. A board that errors is a note in the summary, not a run blocker. If the command itself fails or the registry is missing, record that as the discovery blocker, skip steps 3 and 4, and continue with sections 5–7.
 
 Do not browse LinkedIn or any job board in Chrome to discover roles: the registry feeds are the run's only discovery source. Companies missing from the registry are added by the user, one line each.
 
@@ -75,11 +75,11 @@ Split discovered candidates into at most three batches. Start `job-fit-scorer` a
 Merge their results and run:
 
 ```bash
-python3 -m job_agent discover --input artifacts/YYYY-MM-DD/discovered.json
+python3 -m job_agent discover --input artifacts/YYYY-MM-DD/discovered.json --run-id RUN_ID
 python3 -m job_agent score --run-id RUN_ID
 ```
 
-Use the returned `RUN_ID` for the remainder of the run. The CLI performs hard filters, scoring, deduplication, company-policy routing, and queues at most five eligible candidates. A `manual_review` result is deliberately excluded from the application queue.
+Pass the `RUN_ID` from `fetch-feeds` to `discover`, so the jobs and the discovery stats share one run. If discovery failed and there is no `RUN_ID` yet, omit `--run-id` and use the one `discover` returns. The CLI performs hard filters, scoring, deduplication, company-policy routing, and queues every eligible candidate scoring at least `minimum_fit_score`; there is no daily cap. A `manual_review` result is deliberately excluded from the application queue.
 
 ### 4. Delegate applications sequentially
 
@@ -91,7 +91,7 @@ Replace `SUBMIT` with the claim's `submit` value.
 
 Then process the queue:
 
-1. Run `python3 -m job_agent claim --worker-id daily-browser-worker`.
+1. Run `python3 -m job_agent claim --worker-id daily-browser-worker --run-id RUN_ID`. Each claim is logged as one application attempt for this run.
 2. If the result is `null`, stop application work.
 3. Start a fresh worker with the required prompt and pass only the job ID, company, role, application URL or opened tab, and the claim's `submit` value.
 4. Run the worker in the foreground and wait for it to finish before claiming or assigning another job. Do not stop a form worker merely because it is slow; stopping it can release or close its controlled tab.
@@ -152,7 +152,7 @@ Claude can run multiple one-job application workers, but the current Local Resum
 
 ### 5. Analyze blockers and file to-dos
 
-Run `python3 -m job_agent report --since TODAY` (TODAY as `YYYY-MM-DD`, UTC) for this run's attempts and `python3 -m job_agent report` for the all-time rate. For every blocked job today, and for every `ready_for_review` that should have been submitted, decide the root cause from the worker's blocker message and evidence: authentication (which ATS or identity provider, which agent-vault status), ATS control or navigation, résumé upload, CAPTCHA or identity verification, submission rejected or unconfirmed, or infrastructure (Chrome, extension, agent-vault). Write the analysis to `artifacts/YYYY-MM-DD/retro.md`.
+Run `python3 -m job_agent report --run-id RUN_ID` for this run's attempts and `python3 -m job_agent report` for the all-time rate. The submission rate is submitted attempts divided by all finished application attempts: every claim counts once, so a retried job counts as two attempts, and a ready_for_review, blocked or abandoned (stale-claim) attempt counts as not submitted. The all-time rate counts from `rate_counted_since` (the rate was reset on 2026-10-20). For every blocked job today, and for every `ready_for_review` that should have been submitted, decide the root cause from the worker's blocker message and evidence: authentication (which ATS or identity provider, which agent-vault status), ATS control or navigation, résumé upload, CAPTCHA or identity verification, submission rejected or unconfirmed, or infrastructure (Chrome, extension, agent-vault). Write the analysis to `artifacts/YYYY-MM-DD/retro.md`.
 
 Then decide whether each fix is a generalization improvement: a change to the worker skill, agent-vault, Local Resume Companion, or the pipeline that would also unblock other companies on the same ATS or the same kind of gate (for example "agent-vault register misses the iCIMS Email field", "Workday Network Error on upload needs a retry"). One-off causes are not: the posting closed, one company needs an account only the user can create, or identity verification the user must do in person.
 
@@ -180,10 +180,10 @@ Ignore job alerts, newsletters, and agent-vault verification emails. Do not open
 
 Do not send or track per-job emails. At the end:
 
-1. Run `python3 -m job_agent digest --run-id RUN_ID`. The body already includes the submission rate and blocker counts for this run. Append, as plain lines: the all-time submission rate from section 5, the root cause of each blocker and whether a to-do was filed (by ID), and the Gmail findings from section 6.
+1. Run `python3 -m job_agent digest --run-id RUN_ID`. The body already includes the companies checked, postings scanned, the submission rate and blocker counts for this run. Append, as plain lines: the all-time submission rate from section 5, the root cause of each blocker and whether a to-do was filed (by ID), and the Gmail findings from section 6.
 2. If the payload is `eligible`, send `email.subject` and `email.body` to exactly `email.to` with the Gmail `send_message` tool. Then acknowledge with `python3 -m job_agent digest --run-id RUN_ID --sent-key KEY`, or record failure with `--failed-key KEY`.
 3. Run `python3 -m job_agent finish-run --run-id RUN_ID`.
 
 ## Required final report
 
-Report discovered, deduplicated, skipped, manual-attention, submitted, ready, blocked, and remaining queued counts, plus the percentage of attempted applications submitted today and all time. List each manual-attention, submitted, ready, or blocked company and role; include the applicable company-policy document, the confirmation evidence for submissions, or the blocker and its root cause. List the to-dos filed (by ID) and the recruiter, interview, and rejection emails found. If `submit` was `false`, state that nothing was submitted.
+Report companies checked, postings scanned, discovered, deduplicated, skipped, manual-attention, submitted, ready, blocked, and remaining queued counts, plus the submission rate (submitted attempts / application attempts) for this run and all time. List each manual-attention, submitted, ready, or blocked company and role; include the applicable company-policy document, the confirmation evidence for submissions, or the blocker and its root cause. List the to-dos filed (by ID) and the recruiter, interview, and rejection emails found. If `submit` was `false`, state that nothing was submitted.

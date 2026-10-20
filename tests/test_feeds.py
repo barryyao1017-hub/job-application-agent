@@ -32,7 +32,6 @@ ZONE = ZoneInfo("America/Los_Angeles")
 CONFIG = {
     "approved_resume_path": "/dev/null",
     "notification_email": "barryyao1017@gmail.com",
-    "daily_limit": 5,
     "recency_hours": 24,
     "minimum_fit_score": 70,
     "submit_applications": False,

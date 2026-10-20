@@ -99,6 +99,9 @@ class AgentInstructionTests(unittest.TestCase):
         pipeline = PIPELINE_SKILL.read_text(encoding="utf-8")
 
         self.assertIn("python3 -m job_agent report", pipeline)
+        self.assertIn("submitted attempts divided by all finished application attempts", pipeline)
+        self.assertIn("there is no daily cap", pipeline)
+        self.assertIn("--run-id RUN_ID", pipeline)
         self.assertIn("generalization improvement", pipeline)
         self.assertIn("https://claude.ai/artifact/WSphNhTrrHRRg3DVgEKDhi", pipeline)
         self.assertIn("### 6. Check Gmail for recruiter replies", pipeline)

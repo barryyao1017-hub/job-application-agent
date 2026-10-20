@@ -20,6 +20,7 @@ from job_agent.core import (
     mark_notification,
     match_company_policy,
     outcome_report,
+    record_discovery,
     recover_stale_claims,
     score_candidate,
     score_jobs,
@@ -34,7 +35,6 @@ def config(resume: Path) -> dict:
     return {
         "approved_resume_path": str(resume),
         "notification_email": "barryyao1017@gmail.com",
-        "daily_limit": 5,
         "recency_hours": 24,
         "minimum_fit_score": 70,
         "submit_applications": True,
@@ -114,6 +114,15 @@ class CoreTests(unittest.TestCase):
         ingest_candidates(self.connection, [candidate()], self.run_id)
         scored = score_jobs(self.connection, self.cfg, self.run_id, now=NOW)
         self.assertEqual(len(scored["queued"]), 1)
+
+    def test_every_job_at_threshold_is_queued_without_a_cap(self) -> None:
+        jobs = [
+            candidate(application_url=f"https://job-boards.greenhouse.io/acme/jobs/{900000 + n}")
+            for n in range(8)
+        ]
+        ingest_candidates(self.connection, jobs, self.run_id)
+        scored = score_jobs(self.connection, self.cfg, self.run_id, now=NOW)
+        self.assertEqual(len(scored["queued"]), 8)
 
     def test_company_policy_alias_matches_exactly(self) -> None:
         policies = load_company_policies(self.cfg["company_policies_path"])
@@ -296,14 +305,72 @@ class CoreTests(unittest.TestCase):
         second = claim_next(self.connection, "w")
         block_job(self.connection, second["id"], "w", "captcha", "CAPTCHA shown")
         report = outcome_report(self.connection, run_id=self.run_id)
-        self.assertEqual(report["attempted"], 2)
-        self.assertEqual(report["submitted_percent"], 50.0)
+        self.assertEqual(report["attempts"], 2)
+        self.assertEqual(report["submission_rate_percent"], 50.0)
         self.assertEqual(report["blockers"]["captcha"][0]["message"], "CAPTCHA shown")
         self.assertEqual(report["ready_for_review"], [])
         body = digest_payload(self.connection, self.cfg, self.run_id, now=NOW)["email"]["body"]
-        self.assertIn("Submitted 1 of 2 attempted applications (50.0%)", body)
+        self.assertIn("Submitted 1 of 2 application attempts (50.0%)", body)
         self.assertIn("Blocked — captcha: 1", body)
         self.assertNotIn("No applications were submitted", body)
+
+    def test_rate_counts_each_attempt_including_retries_and_abandoned(self) -> None:
+        ingest_candidates(self.connection, [candidate()], self.run_id)
+        score_jobs(self.connection, self.cfg, self.run_id, now=NOW)
+        job = claim_next(self.connection, "w")
+        block_job(self.connection, job["id"], "w", "technical_failure", "Upload failed")
+        # Retry in a later run: re-queue, abandon once, then submit.
+        later = create_run(self.connection, "run-2")
+        self.connection.execute("UPDATE jobs SET status='queued' WHERE id=?", (job["id"],))
+        claim_next(self.connection, "w", run_id=later)
+        recover_stale_claims(self.connection, 0, now=datetime.now(timezone.utc) + timedelta(minutes=1))
+        retry = claim_next(self.connection, "w", run_id=later)
+        submit_job(
+            self.connection,
+            retry["id"],
+            "w",
+            confirmation_url=retry["application_url"],
+            evidence="Application received",
+            resume_verified=True,
+            submit_applications=True,
+        )
+        overall = outcome_report(self.connection)
+        self.assertEqual(overall["attempts"], 3)
+        self.assertEqual(
+            overall["attempt_outcomes"],
+            {"submitted": 1, "ready_for_review": 0, "blocked": 1, "abandoned": 1},
+        )
+        self.assertEqual(overall["submission_rate_percent"], 33.3)
+        self.assertEqual(outcome_report(self.connection, run_id=later)["attempts"], 2)
+        self.assertEqual(outcome_report(self.connection, run_id=self.run_id)["attempts"], 1)
+
+    def test_claim_without_run_id_uses_latest_running_run(self) -> None:
+        ingest_candidates(self.connection, [candidate()], self.run_id)
+        score_jobs(self.connection, self.cfg, self.run_id, now=NOW)
+        claim_next(self.connection, "w")
+        run = self.connection.execute("SELECT run_id FROM attempts").fetchone()["run_id"]
+        self.assertEqual(run, self.run_id)
+
+    def test_discovery_stats_are_recorded_and_reported(self) -> None:
+        boards = [
+            {"company": "Acme", "ats": "greenhouse", "fetched": 120, "kept": 2, "errors": []},
+            {"company": "Beta", "ats": "lever", "fetched": 30, "kept": 0, "errors": []},
+            {"company": "Gamma", "ats": "workday", "fetched": 0, "kept": 0, "errors": ["HTTP 500"]},
+        ]
+        summary = record_discovery(self.connection, self.run_id, boards)
+        self.assertEqual(summary["companies_checked"], 3)
+        self.assertEqual(summary["postings_scanned"], 150)
+        self.assertEqual(summary["companies_with_matches"], {"Acme": 2})
+        self.assertEqual(summary["companies_with_errors"], ["Gamma"])
+        # Recording again for the same run replaces, not appends.
+        record_discovery(self.connection, self.run_id, boards[:2])
+        report = outcome_report(self.connection)
+        self.assertEqual(report["discovery"][0]["companies_checked"], 2)
+        body = digest_payload(self.connection, self.cfg, self.run_id, now=NOW)["email"]["body"]
+        self.assertIn("Companies checked: 2\n", body)
+        self.assertIn("Postings scanned: 150", body)
+        self.assertIn("Companies with new matching roles: Acme (2)", body)
+        self.assertIn("Companies checked: Acme, Beta", body)
 
     def test_legacy_review_only_config_disables_submission(self) -> None:
         import json

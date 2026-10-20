@@ -22,6 +22,7 @@ from .core import (
     mark_notification,
     match_company_policy,
     outcome_report,
+    record_discovery,
     recover_stale_claims,
     score_jobs,
     submit_job,
@@ -58,6 +59,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=10,
         help="Pages to walk per Workday board and per Amazon query (newest first)",
     )
+    fetch_feeds.add_argument(
+        "--run-id",
+        help="Run to record the per-company stats under (default: a new run); "
+        "pass the printed run_id to discover",
+    )
 
     discover = subparsers.add_parser("discover")
     discover.add_argument("--input", type=Path, required=True)
@@ -73,6 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     claim = subparsers.add_parser("claim")
     claim.add_argument("--worker-id", required=True)
+    claim.add_argument("--run-id", help="Run the attempt counts toward (default: latest running run)")
 
     complete = subparsers.add_parser("complete")
     complete.add_argument("--job-id", required=True)
@@ -117,15 +124,18 @@ def main(argv: list[str] | None = None) -> int:
         config = load_config(args.config)
         connection = connect_db(args.db)
         if args.command == "fetch-feeds":
-            emit(
-                run_fetch_feeds(
-                    config,
-                    registry_path=args.registry,
-                    out_path=args.out,
-                    queries=args.queries,
-                    max_pages=args.max_pages,
-                )
+            result = run_fetch_feeds(
+                config,
+                registry_path=args.registry,
+                out_path=args.out,
+                queries=args.queries,
+                max_pages=args.max_pages,
             )
+            run_id = create_run(connection, args.run_id)
+            summary = record_discovery(connection, run_id, result["boards"])
+            result["run_id"] = run_id
+            result["companies_checked"] = summary["companies_checked"]
+            emit(result)
         elif args.command == "discover":
             candidates = json.loads(args.input.read_text(encoding="utf-8"))
             if not isinstance(candidates, list):
@@ -156,7 +166,9 @@ def main(argv: list[str] | None = None) -> int:
                     matches.append({"company": company, **match})
             emit({"matches": matches})
         elif args.command == "claim":
-            claimed = claim_next(connection, args.worker_id, config["company_policies_path"])
+            claimed = claim_next(
+                connection, args.worker_id, config["company_policies_path"], run_id=args.run_id
+            )
             if claimed is not None:
                 claimed["submit"] = config["submit_applications"]
             emit(claimed)

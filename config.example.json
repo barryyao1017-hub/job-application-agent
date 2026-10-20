@@ -3,7 +3,6 @@
   "notification_email": "you@example.com",
   "timezone": "America/Los_Angeles",
   "daily_start_time": "07:00",
-  "daily_limit": 5,
   "run_timeout_minutes": 90,
   "claim_timeout_minutes": 120,
   "recency_hours": 24,
