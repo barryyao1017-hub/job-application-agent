@@ -1,0 +1,49 @@
+{
+  "apiVersion": "1",
+  "jobs": [
+    {
+      "id": "8fb1615c-34bf-47c4-a1d1-b7b2f836bbd3",
+      "title": "Applied AI Engineer",
+      "department": "Applied",
+      "employmentType": "FullTime",
+      "location": "San Francisco",
+      "secondaryLocations": [{"location": "Seattle"}],
+      "publishedAt": "2026-07-30T10:38:15.322+00:00",
+      "isListed": true,
+      "isRemote": false,
+      "jobUrl": "https://jobs.ashbyhq.com/acme/8fb1615c-34bf-47c4-a1d1-b7b2f836bbd3",
+      "applyUrl": "https://jobs.ashbyhq.com/acme/8fb1615c-34bf-47c4-a1d1-b7b2f836bbd3/application",
+      "descriptionHtml": "<h3>About</h3><p>Ship LLM features.</p>",
+      "descriptionPlain": "ABOUT\n\nShip LLM features."
+    },
+    {
+      "id": "bbbb0000-0000-0000-0000-000000000001",
+      "title": "Data Scientist",
+      "location": "Paris",
+      "secondaryLocations": [],
+      "publishedAt": "2026-07-30T10:38:15.322+00:00",
+      "isListed": true,
+      "isRemote": true,
+      "jobUrl": "https://jobs.ashbyhq.com/acme/bbbb0000-0000-0000-0000-000000000001",
+      "descriptionPlain": "Remote."
+    },
+    {
+      "id": "bbbb0000-0000-0000-0000-000000000002",
+      "title": "Machine Learning Engineer, Unlisted",
+      "location": "San Francisco",
+      "publishedAt": "2026-07-30T10:38:15.322+00:00",
+      "isListed": false,
+      "jobUrl": "https://jobs.ashbyhq.com/acme/bbbb0000-0000-0000-0000-000000000002",
+      "descriptionPlain": "Unlisted."
+    },
+    {
+      "id": "bbbb0000-0000-0000-0000-000000000003",
+      "title": "Technical Program Manager, Compute",
+      "location": "San Francisco",
+      "publishedAt": "2026-07-30T10:38:15.322+00:00",
+      "isListed": true,
+      "jobUrl": "https://jobs.ashbyhq.com/acme/bbbb0000-0000-0000-0000-000000000003",
+      "descriptionPlain": "Not ML."
+    }
+  ]
+}

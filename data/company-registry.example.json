@@ -1,0 +1,14 @@
+[
+  {"company": "NVIDIA", "ats": "workday", "host": "nvidia.wd5.myworkdayjobs.com", "tenant": "nvidia", "site": "NVIDIAExternalCareerSite"},
+  {"company": "Amazon", "ats": "amazon"},
+  {"company": "Broadcom", "ats": "workday", "host": "broadcom.wd1.myworkdayjobs.com", "tenant": "broadcom", "site": "External_Career"},
+  {"company": "Intel", "ats": "workday", "host": "intel.wd1.myworkdayjobs.com", "tenant": "intel", "site": "External"},
+  {"company": "Palantir", "ats": "lever", "token": "palantir"},
+  {"company": "Applied Materials", "ats": "workday", "host": "amat.wd1.myworkdayjobs.com", "tenant": "amat", "site": "External"},
+  {"company": "CrowdStrike", "ats": "workday", "host": "crowdstrike.wd5.myworkdayjobs.com", "tenant": "crowdstrike", "site": "crowdstrikecareers"},
+  {"company": "KLA", "ats": "workday", "host": "kla.wd1.myworkdayjobs.com", "tenant": "kla", "site": "Search"},
+  {"company": "Marvell Technology", "ats": "workday", "host": "marvell.wd1.myworkdayjobs.com", "tenant": "marvell", "site": "MarvellCareers"},
+  {"company": "Salesforce", "ats": "workday", "host": "salesforce.wd12.myworkdayjobs.com", "tenant": "salesforce", "site": "External_Career_Site"},
+  {"company": "Anthropic", "ats": "greenhouse", "token": "anthropic"},
+  {"company": "OpenAI", "ats": "ashby", "token": "openai"}
+]

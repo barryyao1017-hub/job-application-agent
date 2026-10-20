@@ -1,0 +1,57 @@
+{
+  "jobs": [
+    {
+      "id": 5456619008,
+      "absolute_url": "https://job-boards.greenhouse.io/acme/jobs/5456619008",
+      "title": "Machine Learning Engineer, Ranking",
+      "location": {"name": "San Francisco, CA | Seattle, WA"},
+      "offices": [{"name": "San Francisco, CA"}],
+      "metadata": [{"name": "Location Type", "value": "On-Site"}],
+      "first_published": "2026-07-30T06:00:00-04:00",
+      "updated_at": "2026-07-30T06:00:00-04:00",
+      "content": "&lt;div class=&quot;content-intro&quot;&gt;&lt;p&gt;Build ranking models with &lt;strong&gt;PyTorch&lt;/strong&gt;.&lt;/p&gt;&lt;ul&gt;&lt;li&gt;2+ years of experience&lt;/li&gt;&lt;/ul&gt;&lt;/div&gt;"
+    },
+    {
+      "id": 5456619009,
+      "absolute_url": "https://job-boards.greenhouse.io/acme/jobs/5456619009",
+      "title": "Revenue Accountant",
+      "location": {"name": "San Francisco, CA"},
+      "first_published": "2026-07-30T09:00:00-04:00",
+      "content": "Close the books."
+    },
+    {
+      "id": 5456619010,
+      "absolute_url": "https://job-boards.greenhouse.io/acme/jobs/5456619010",
+      "title": "Machine Learning Engineer, Infrastructure",
+      "location": {"name": "San Francisco, CA"},
+      "first_published": "2026-07-27T09:00:00-04:00",
+      "content": "Stale posting."
+    },
+    {
+      "id": 5456619011,
+      "absolute_url": "https://job-boards.greenhouse.io/acme/jobs/5456619011",
+      "title": "Data Scientist",
+      "location": {"name": "London, United Kingdom"},
+      "first_published": "2026-07-30T09:00:00-04:00",
+      "content": "Wrong location."
+    },
+    {
+      "id": 5456619012,
+      "absolute_url": "https://job-boards.greenhouse.io/acme/jobs/5456619012",
+      "title": "Data Scientist",
+      "location": {"name": "Toronto, Canada"},
+      "metadata": [{"name": "Location Type", "value": "Remote"}],
+      "first_published": "2026-07-30T09:00:00-04:00",
+      "content": "Remote per metadata."
+    },
+    {
+      "id": 5456619013,
+      "absolute_url": "https://job-boards.greenhouse.io/acme/jobs/5456619013",
+      "title": "Machine Learning Engineer Intern",
+      "location": {"name": "San Francisco, CA"},
+      "first_published": "2026-07-30T09:00:00-04:00",
+      "content": "Internship."
+    }
+  ],
+  "meta": {"total": 6}
+}
