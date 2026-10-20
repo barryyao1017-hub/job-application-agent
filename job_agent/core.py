@@ -94,7 +94,6 @@ def load_config(path: Path | str = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
     required = (
         "approved_resume_path",
         "notification_email",
-        "daily_limit",
         "recency_hours",
         "minimum_fit_score",
         "approved_resume_filename",
@@ -381,6 +380,34 @@ WHERE ats_job_id IS NOT NULL AND ats_job_id <> '';
 CREATE INDEX IF NOT EXISTS jobs_status_score
 ON jobs(status, fit_score DESC, posted_at DESC);
 
+-- One row per claim, so a retried job counts as two attempts. The submission
+-- rate is submitted attempts over finished attempts; it starts from the first
+-- row here (the table was added on 2026-10-20, which reset the rate).
+CREATE TABLE IF NOT EXISTS attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id TEXT NOT NULL REFERENCES jobs(id),
+    run_id TEXT REFERENCES runs(id),
+    worker_id TEXT NOT NULL,
+    claimed_at TEXT NOT NULL,
+    finished_at TEXT,
+    outcome TEXT
+);
+
+CREATE INDEX IF NOT EXISTS attempts_run ON attempts(run_id);
+
+-- Per-board discovery stats from fetch-feeds: which companies a run looked at.
+CREATE TABLE IF NOT EXISTS run_boards (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL REFERENCES runs(id),
+    company TEXT NOT NULL,
+    ats TEXT NOT NULL,
+    fetched INTEGER NOT NULL DEFAULT 0,
+    kept INTEGER NOT NULL DEFAULT 0,
+    errors TEXT
+);
+
+CREATE INDEX IF NOT EXISTS run_boards_run ON run_boards(run_id);
+
 CREATE TABLE IF NOT EXISTS notifications (
     notification_key TEXT PRIMARY KEY,
     job_id TEXT REFERENCES jobs(id),
@@ -419,6 +446,51 @@ def create_run(connection: sqlite3.Connection, run_id: str | None = None) -> str
         (resolved, iso_utc()),
     )
     return resolved
+
+
+def record_discovery(
+    connection: sqlite3.Connection,
+    run_id: str,
+    boards: Iterable[dict[str, Any]],
+) -> dict[str, Any]:
+    """Store fetch-feeds' per-board stats for ``run_id``, replacing any earlier record."""
+    connection.execute("DELETE FROM run_boards WHERE run_id=?", (run_id,))
+    for board in boards:
+        connection.execute(
+            """
+            INSERT INTO run_boards(run_id, company, ats, fetched, kept, errors)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                str(board["company"]),
+                str(board["ats"]),
+                int(board.get("fetched") or 0),
+                int(board.get("kept") or 0),
+                json.dumps(list(board.get("errors") or [])),
+            ),
+        )
+    return discovery_summary(connection, run_id)
+
+
+def discovery_summary(connection: sqlite3.Connection, run_id: str) -> dict[str, Any]:
+    """What a run's discovery looked at: companies checked, postings scanned, matches kept."""
+    rows = connection.execute(
+        "SELECT company, ats, fetched, kept, errors FROM run_boards WHERE run_id=? ORDER BY company",
+        (run_id,),
+    ).fetchall()
+    with_errors = sorted({row["company"] for row in rows if json.loads(row["errors"] or "[]")})
+    return {
+        "run_id": run_id,
+        "companies_checked": len({row["company"] for row in rows}),
+        "companies": sorted({row["company"] for row in rows}),
+        "postings_scanned": sum(row["fetched"] for row in rows),
+        "matches_kept": sum(row["kept"] for row in rows),
+        "companies_with_matches": {
+            row["company"]: row["kept"] for row in rows if row["kept"]
+        },
+        "companies_with_errors": with_errors,
+    }
 
 
 def ingest_candidates(
@@ -540,8 +612,8 @@ def score_jobs(
                 )
                 scored.append(row["id"])
 
+    # Every job at or above the threshold is queued; there is no daily cap.
     threshold = int(config["minimum_fit_score"])
-    limit = int(config["daily_limit"])
     queue_params: list[Any] = [threshold]
     queue_where = "status='scored' AND fit_score >= ?"
     if run_id:
@@ -551,9 +623,8 @@ def score_jobs(
         f"""
         SELECT id FROM jobs WHERE {queue_where}
         ORDER BY fit_score DESC, COALESCE(posted_at, discovered_at) DESC
-        LIMIT ?
         """,
-        (*queue_params, limit),
+        queue_params,
     ).fetchall()
     queued = [row["id"] for row in selected]
     if queued:
@@ -574,7 +645,9 @@ def claim_next(
     connection: sqlite3.Connection,
     worker_id: str,
     company_policies_path: Path | str = DEFAULT_COMPANY_POLICIES_PATH,
+    run_id: str | None = None,
 ) -> dict[str, Any] | None:
+    """Claim the best queued job and log the attempt against ``run_id`` (default: latest running run)."""
     policies = load_company_policies(company_policies_path)
     connection.execute("BEGIN IMMEDIATE")
     try:
@@ -615,12 +688,28 @@ def claim_next(
             """,
             (worker_id, now, now, row["id"]),
         )
+        if run_id is None:
+            running = connection.execute(
+                "SELECT id FROM runs WHERE status='running' ORDER BY started_at DESC LIMIT 1"
+            ).fetchone()
+            run_id = running["id"] if running else None
+        connection.execute(
+            "INSERT INTO attempts(job_id, run_id, worker_id, claimed_at) VALUES (?, ?, ?, ?)",
+            (row["id"], run_id, worker_id, now),
+        )
         claimed = connection.execute("SELECT * FROM jobs WHERE id=?", (row["id"],)).fetchone()
         connection.execute("COMMIT")
         return dict(claimed)
     except Exception:
         connection.execute("ROLLBACK")
         raise
+
+
+def finish_attempt(connection: sqlite3.Connection, job_id: str, outcome: str) -> None:
+    connection.execute(
+        "UPDATE attempts SET finished_at=?, outcome=? WHERE job_id=? AND finished_at IS NULL",
+        (iso_utc(), outcome, job_id),
+    )
 
 
 def complete_job(
@@ -651,6 +740,7 @@ def complete_job(
             job_id,
         ),
     )
+    finish_attempt(connection, job_id, "ready_for_review")
     return dict(connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone())
 
 
@@ -685,10 +775,45 @@ def submit_job(
         """,
         (canonicalize_url(confirmation_url), now, evidence.strip(), now, job_id),
     )
+    finish_attempt(connection, job_id, "submitted")
     return dict(connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone())
 
 
 ATTEMPTED_STATUSES = ("submitted", "ready_for_review", "blocked")
+ATTEMPT_OUTCOMES = ("submitted", "ready_for_review", "blocked", "abandoned")
+
+
+def attempt_stats(
+    connection: sqlite3.Connection,
+    *,
+    run_id: str | None = None,
+    since: str | None = None,
+) -> dict[str, Any]:
+    """Submission rate = submitted attempts / finished attempts (each claim is one attempt)."""
+    clauses = ["finished_at IS NOT NULL"]
+    params: list[Any] = []
+    if run_id:
+        clauses.append("run_id=?")
+        params.append(run_id)
+    if since:
+        clauses.append("claimed_at >= ?")
+        params.append(since)
+    outcomes = {outcome: 0 for outcome in ATTEMPT_OUTCOMES}
+    for row in connection.execute(
+        f"SELECT outcome, COUNT(*) AS count FROM attempts WHERE {' AND '.join(clauses)} GROUP BY outcome",
+        params,
+    ).fetchall():
+        outcomes[row["outcome"]] = row["count"]
+    attempts = sum(outcomes.values())
+    first = connection.execute("SELECT MIN(claimed_at) AS first FROM attempts").fetchone()["first"]
+    return {
+        "attempts": attempts,
+        "attempt_outcomes": outcomes,
+        "submission_rate_percent": (
+            round(100 * outcomes["submitted"] / attempts, 1) if attempts else None
+        ),
+        "rate_counted_since": first,
+    }
 
 
 def outcome_report(
@@ -697,7 +822,7 @@ def outcome_report(
     run_id: str | None = None,
     since: str | None = None,
 ) -> dict[str, Any]:
-    """Summarize attempted applications: submission rate and blockers by category."""
+    """Submission rate over attempts, the jobs in each outcome, blockers by category, discovery."""
     clauses = [f"status IN ({','.join('?' for _ in ATTEMPTED_STATUSES)})"]
     params: list[Any] = list(ATTEMPTED_STATUSES)
     if run_id:
@@ -744,14 +869,40 @@ def outcome_report(
                     "url": row["url"],
                 }
             )
-    attempted = len(rows)
+    if run_id:
+        discovery: Any = discovery_summary(connection, run_id)
+    else:
+        run_params: list[Any] = []
+        run_where = ""
+        if since:
+            run_where = "WHERE runs.started_at >= ?"
+            run_params.append(since)
+        discovery = [
+            {
+                "run_id": row["id"],
+                "started_at": row["started_at"],
+                "companies_checked": row["companies"],
+                "postings_scanned": row["fetched"],
+                "matches_kept": row["kept"],
+            }
+            for row in connection.execute(
+                f"""
+                SELECT runs.id, runs.started_at, COUNT(DISTINCT company) AS companies,
+                    SUM(fetched) AS fetched, SUM(kept) AS kept
+                FROM runs JOIN run_boards ON run_boards.run_id = runs.id
+                {run_where}
+                GROUP BY runs.id ORDER BY runs.started_at
+                """,
+                run_params,
+            ).fetchall()
+        ]
     return {
-        "attempted": attempted,
+        **attempt_stats(connection, run_id=run_id, since=since),
         "counts": counts,
-        "submitted_percent": round(100 * counts["submitted"] / attempted, 1) if attempted else None,
         "submitted": submitted,
         "ready_for_review": ready,
         "blockers": blockers,
+        "discovery": discovery,
     }
 
 
@@ -776,6 +927,7 @@ def block_job(
         """,
         (category, message, review_url, iso_utc(), job_id),
     )
+    finish_attempt(connection, job_id, "blocked")
     return dict(connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone())
 
 
@@ -799,6 +951,8 @@ def recover_stale_claims(
             """,
             (iso_utc(now), *recovered),
         )
+        for job_id in recovered:
+            finish_attempt(connection, job_id, "abandoned")
     return recovered
 
 
@@ -869,8 +1023,11 @@ def digest_payload(
         """,
         (run_id,),
     ).fetchall()
+    discovery = discovery_summary(connection, run_id)
     lines = [
         f"Daily job application run: {run_id}",
+        f"Companies checked: {discovery['companies_checked']}",
+        f"Postings scanned: {discovery['postings_scanned']}",
         f"Discovered: {sum(counts.values())}",
         f"Submitted: {counts.get('submitted', 0)}",
         f"Ready for review (not submitted): {counts.get('ready_for_review', 0)}",
@@ -891,13 +1048,26 @@ def digest_payload(
         )
     outcomes = outcome_report(connection, run_id=run_id)
     lines.append("")
-    if outcomes["attempted"]:
+    if outcomes["attempts"]:
         lines.append(
-            f"Submitted {outcomes['counts']['submitted']} of {outcomes['attempted']} "
-            f"attempted applications ({outcomes['submitted_percent']}%)."
+            f"Submitted {outcomes['attempt_outcomes']['submitted']} of {outcomes['attempts']} "
+            f"application attempts ({outcomes['submission_rate_percent']}%)."
         )
         for category, jobs in sorted(outcomes["blockers"].items()):
             lines.append(f"Blocked — {category}: {len(jobs)}")
+    if discovery["companies_checked"]:
+        lines.append("")
+        if discovery["companies_with_matches"]:
+            lines.append(
+                "Companies with new matching roles: "
+                + ", ".join(
+                    f"{company} ({kept})"
+                    for company, kept in sorted(discovery["companies_with_matches"].items())
+                )
+            )
+        if discovery["companies_with_errors"]:
+            lines.append("Boards with errors: " + ", ".join(discovery["companies_with_errors"]))
+        lines.append("Companies checked: " + ", ".join(discovery["companies"]))
     if not counts.get("submitted"):
         lines.append("No applications were submitted.")
     return {
