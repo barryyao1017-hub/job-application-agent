@@ -1,0 +1,13 @@
+{
+  "total": 23,
+  "jobPostings": [
+    {"title": "Machine Learning Engineer, AI Safety", "externalPath": "/job/US-CA-Santa-Clara/Machine-Learning-Engineer--AI-Safety_JR2021784-1", "locationsText": "US, CA, Santa Clara", "postedOn": "Posted Today", "bulletFields": ["JR2021784"]},
+    {"title": "Senior Machine Learning Engineer", "externalPath": "/job/2-Locations/Senior-Deep-Learning-Engineer_JR2021785", "locationsText": "2 Locations", "postedOn": "Posted Yesterday", "bulletFields": ["JR2021785"]},
+    {"title": "Data Scientist, Supply Chain", "externalPath": "/job/US-CA-Santa-Clara/Data-Scientist--Supply-Chain_JR2021786", "locationsText": "US, CA, Santa Clara", "postedOn": "Posted 2 Days Ago", "bulletFields": ["JR2021786"]},
+    {"title": "Account Manager", "externalPath": "/job/US-CA-Santa-Clara/Account-Manager_JR2021787", "locationsText": "US, CA, Santa Clara", "postedOn": "Posted Today", "bulletFields": ["JR2021787"]},
+    {"title": "Machine Learning Engineer, Humanoid Robotics", "externalPath": "/job/China-Shanghai/Machine-Learning-Engineer---Humanoid-Robotics_JR2016809", "locationsText": "China, Shanghai", "postedOn": "Posted Today", "bulletFields": ["JR2016809"]},
+    {"title": "AI Research Scientist", "externalPath": "/job/US-CA-Santa-Clara/AI-Research-Scientist_JR2021788", "locationsText": "US, CA, Santa Clara", "postedOn": "Posted 30+ Days Ago", "bulletFields": ["JR2021788"]}
+  ],
+  "facets": [],
+  "userAuthenticated": false
+}

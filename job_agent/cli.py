@@ -26,6 +26,7 @@ from .core import (
     score_jobs,
     submit_job,
 )
+from .feeds import DEFAULT_QUERIES, DEFAULT_REGISTRY_PATH, run_fetch_feeds
 
 
 def emit(value: Any) -> None:
@@ -37,6 +38,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
     parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    fetch_feeds = subparsers.add_parser(
+        "fetch-feeds",
+        help="Pull the ATS job boards in the company registry into a discovered.json file",
+    )
+    fetch_feeds.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY_PATH)
+    fetch_feeds.add_argument("--out", type=Path, required=True)
+    fetch_feeds.add_argument(
+        "--queries",
+        nargs="+",
+        default=list(DEFAULT_QUERIES),
+        help="Search terms for boards that only expose a search API (Amazon); "
+        "the other boards list every open job and are filtered by title locally",
+    )
+    fetch_feeds.add_argument(
+        "--max-pages",
+        type=int,
+        default=10,
+        help="Pages to walk per Workday board and per Amazon query (newest first)",
+    )
 
     discover = subparsers.add_parser("discover")
     discover.add_argument("--input", type=Path, required=True)
@@ -95,7 +116,17 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = load_config(args.config)
         connection = connect_db(args.db)
-        if args.command == "discover":
+        if args.command == "fetch-feeds":
+            emit(
+                run_fetch_feeds(
+                    config,
+                    registry_path=args.registry,
+                    out_path=args.out,
+                    queries=args.queries,
+                    max_pages=args.max_pages,
+                )
+            )
+        elif args.command == "discover":
             candidates = json.loads(args.input.read_text(encoding="utf-8"))
             if not isinstance(candidates, list):
                 raise ValueError("Discovery input must be a JSON array")

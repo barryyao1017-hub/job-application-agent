@@ -1,0 +1,49 @@
+{
+  "error": null,
+  "hits": 3,
+  "jobs": [
+    {
+      "id": "324d27db-e09b-47d7-83ff-dd9fbb5bddfd",
+      "id_icims": "10578465",
+      "title": "Applied Scientist, Search Relevance",
+      "company_name": "Amazon.com Services LLC",
+      "location": "US, GA, Atlanta",
+      "locations": [
+        "{\"normalizedStateName\":\"Washington\",\"city\":\"Seattle\",\"location\":\"US, WA, Seattle\",\"normalizedLocation\":\"Seattle, Washington, USA\"}",
+        "{\"normalizedStateName\":\"Georgia\",\"city\":\"Atlanta\",\"location\":\"US, GA, Atlanta\",\"normalizedLocation\":\"Atlanta, Georgia, USA\"}"
+      ],
+      "posted_date": "July 29, 2026",
+      "updated_time": "1 day",
+      "job_path": "/en/jobs/10578465/applied-scientist-search-relevance",
+      "description": "Improve search relevance.<br/>Work with ranking models.",
+      "basic_qualifications": "- 2+ years of experience<br/>- Python",
+      "preferred_qualifications": "- PyTorch",
+      "is_intern": null,
+      "is_manager": null
+    },
+    {
+      "id": "cccc0000-0000-0000-0000-000000000001",
+      "id_icims": "10578466",
+      "title": "Applied Scientist Intern",
+      "location": "US, WA, Seattle",
+      "locations": [],
+      "posted_date": "July 30, 2026",
+      "job_path": "/en/jobs/10578466/applied-scientist-intern",
+      "description": "Intern.",
+      "is_intern": true,
+      "is_manager": null
+    },
+    {
+      "id": "cccc0000-0000-0000-0000-000000000002",
+      "id_icims": "10578467",
+      "title": "Data Scientist, Alexa",
+      "location": "US, WA, Seattle",
+      "locations": [],
+      "posted_date": "July 20, 2026",
+      "job_path": "/en/jobs/10578467/data-scientist-alexa",
+      "description": "Stale.",
+      "is_intern": null,
+      "is_manager": null
+    }
+  ]
+}

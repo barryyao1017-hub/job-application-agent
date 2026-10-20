@@ -1,6 +1,6 @@
 ---
 name: job-application-pipeline
-description: "Orchestrate the local daily job-search pilot: discover recent LinkedIn ML/Data roles, apply documented company-specific routing policies, validate canonical ATS pages, deduplicate and score jobs, route eligible applications through strict login gates (existing credentials or an account agent-vault creates), delegate sequential application work that submits when enabled, analyze blockers into to-dos, check Gmail for recruiter replies, and report a privacy-minimal summary. Use for scheduled or manual discovery runs, queued application processing, login-gated applications, stale-claim recovery, and daily job-application summaries."
+description: "Orchestrate the local daily job-search pilot: discover recent ML/Data roles from the company registry's ATS job feeds, apply documented company-specific routing policies, validate canonical ATS pages, deduplicate and score jobs, route eligible applications through strict login gates (existing credentials or an account agent-vault creates), delegate sequential application work that submits when enabled, analyze blockers into to-dos, check Gmail for recruiter replies, and report a privacy-minimal summary. Use for scheduled or manual discovery runs, queued application processing, login-gated applications, stale-claim recovery, and daily job-application summaries."
 ---
 
 # Daily Job Application Pipeline
@@ -32,32 +32,33 @@ Run from the repository root. Invoking this skill, including from the scheduled 
 
 ### 2. Discover recent roles
 
-Use the signed-in Chrome LinkedIn session through the Claude in Chrome tools (`mcp__claude-in-chrome__*`; load them with ToolSearch if deferred). Start by creating a new tab rather than reusing the user's tabs. Search postings from the past 24 hours with:
+Discovery is a ledger command, not a browser task. Run:
 
-1. `machine learning engineer OR applied AI OR AI engineer OR ranking OR relevance OR recommendation OR personalization`
-2. `data scientist OR data science engineer OR applied scientist`
+```bash
+python3 -m job_agent fetch-feeds --registry data/company-registry.json --out artifacts/YYYY-MM-DD/discovered.json
+```
 
-Apply California, Washington, and United States remote filters. Collect no more than 50 visible results. Open each promising result's canonical company/ATS page and confirm that it is active. Do not use general software-engineering roles.
-
-Write a JSON array to `artifacts/YYYY-MM-DD/discovered.json`. Each item must contain:
+It pulls the Greenhouse, Lever, Ashby, Workday and Amazon job boards listed in `data/company-registry.json` (private, gitignored; template in `data/company-registry.example.json`), keeps ML/Data individual-contributor postings from the past `recency_hours` whose location is preferred or US-remote, and writes the discovery array. Each item has this shape:
 
 ```json
 {
-  "source": "linkedin",
-  "source_url": "https://www.linkedin.com/jobs/view/...",
-  "application_url": "https://canonical-company-or-ats-page/...",
+  "source": "ats-api",
+  "source_url": "https://job-boards.greenhouse.io/company/jobs/123",
+  "application_url": "https://job-boards.greenhouse.io/company/jobs/123",
   "company": "Company",
   "title": "Role",
   "location": "Location",
   "remote": false,
   "posted_at": "ISO-8601 timestamp",
-  "description": "Visible job description",
-  "minimum_years": 2,
+  "description": "Job description text",
+  "minimum_years": null,
   "active": true
 }
 ```
 
-If LinkedIn requires login/MFA or shows a CAPTCHA, end discovery, record the blocker in the run summary, and notify. Do not search around the restriction.
+Put the per-board stats it prints (`fetched`, `kept`, `errors`) in the run summary. A board that errors is a note in the summary, not a run blocker. If the command itself fails or the registry is missing, record that as the discovery blocker, skip steps 3 and 4, and continue with sections 5–7.
+
+Do not browse LinkedIn or any job board in Chrome to discover roles: the registry feeds are the run's only discovery source. Companies missing from the registry are added by the user, one line each.
 
 After writing the discovery file, run:
 

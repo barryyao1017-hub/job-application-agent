@@ -4,13 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 # Job application agent
 
-Local daily pipeline: discover recent ML/Data roles on LinkedIn, score and dedupe them in a SQLite ledger, and fill and submit up to five applications in the agent's Chrome. Workers submit only while `config.json` has `submit_applications: true` (the ledger refuses `submit` otherwise); with it `false` they stop at the final Review page.
+Local daily pipeline: discover recent ML/Data roles from employer ATS job feeds (Greenhouse, Lever, Ashby, Workday, Amazon), score and dedupe them in a SQLite ledger, and fill and submit up to five applications in the agent's Chrome. Workers submit only while `config.json` has `submit_applications: true` (the ledger refuses `submit` otherwise); with it `false` they stop at the final Review page.
 
 ## Commands
 
 - All tests: `python3 -m unittest` (stdlib only; no dependencies, build step, or linter).
 - One test: `python3 -m unittest tests.test_core.CoreTests.test_hard_filters`.
 - Ledger CLI: `python3 -m job_agent --help`. Every subcommand prints JSON; errors print `{"error", "type"}` and exit 1. `--config` / `--db` override the defaults (`config.json`, `data/job-agent.sqlite3`) — point them at temp paths when experimenting so the real ledger is untouched.
+- Feed discovery: `python3 -m job_agent fetch-feeds --registry data/company-registry.json --out artifacts/YYYY-MM-DD/discovered.json` pulls the Greenhouse, Lever, Ashby, Workday and Amazon boards listed in the registry concurrently (stdlib `urllib` only), keeps recent ML/Data postings in the preferred locations, and writes the `discovered.json` array that `discover` ingests (`source: "ats-api"`). It prints per-board stats (`fetched`, `kept`, `skipped`, `errors`); a failing board is reported, not fatal. `--queries` only matter for Amazon's search API; `--max-pages` bounds the newest-first walk per Workday board and Amazon query. Workday and Amazon only give day-level dates, so those rows get `posted_at` at the end of that day (config `timezone`) and `posted_at_precision: "day"`. The registry is `data/company-registry.json` (gitignored; copy `data/company-registry.example.json`, one entry per company with `ats` and the board `token`, or `host`/`tenant`/`site` for Workday). Parsers live in `job_agent/feeds.py`; `tests/test_feeds.py` covers each ATS with canned fixtures in `tests/fixtures/feeds/`.
 - Scheduled runs: `scripts/install-schedules.sh` (re-run after editing schedules; `--uninstall` removes them). Run one by hand with `scripts/run-automation.sh job-pipeline`.
 
 ## Architecture
@@ -19,7 +20,7 @@ The work is split between a deterministic Python ledger and LLM instructions:
 
 - `job_agent/core.py` holds all state and rules: URL canonicalization (tracking params stripped, identity params kept), dedupe by canonical URL and by `(company, ats_job_id)`, rule-based scoring with hard filters (internship, management, citizenship/clearance, >5 years, recency, non-ML role, location), company-policy matching, atomic claims, and the idempotent email digest. `cli.py` is a thin argparse wrapper.
 - Job status flow: `discovered` → `scored` | `skipped` | `manual_review` → `queued` (fit ≥ `minimum_fit_score`, capped by `daily_limit`) → `claimed` → `submitted` | `ready_for_review` | `blocked`. `report` gives the submission rate and blockers by category. `recover-stale-claims` returns old claims to `queued`. `complete` and `submit` require `--resume-verified`; `submit` also needs `--evidence` (the on-page confirmation). Policy companies are re-checked at claim time, so a `manual_review` company is never claimed even if queued earlier.
-- `.claude/skills/job-application-pipeline` drives a run: discovery in Chrome → `job-fit-scorer` enriches candidates → `discover`/`score` → loop of `claim` → one `application-worker` (foreground, one at a time) → `submit`/`complete`/`block` → blocker retro + to-dos → Gmail recruiter-reply check → `digest` → Gmail send → `finish-run`.
+- `.claude/skills/job-application-pipeline` drives a run: `fetch-feeds` discovery → `job-fit-scorer` enriches candidates → `discover`/`score` → loop of `claim` → one `application-worker` (foreground, one at a time) → `submit`/`complete`/`block` → blocker retro + to-dos → Gmail recruiter-reply check → `digest` → Gmail send → `finish-run`.
 - Schema changes go in `SCHEMA` plus the `ALTER TABLE` migration in `connect_db`, since existing ledgers are reused.
 
 ## Layout

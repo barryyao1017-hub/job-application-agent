@@ -1,0 +1,40 @@
+[
+  {
+    "id": "6ed76ce8-4156-4b60-b120-403538bd66cd",
+    "text": "Data Scientist, Product",
+    "categories": {"commitment": "Full-time", "location": "Palo Alto, CA", "team": "Data", "allLocations": ["Palo Alto, CA", "New York, NY"]},
+    "createdAt": 1785412800000,
+    "workplaceType": "hybrid",
+    "country": "US",
+    "descriptionPlain": "A World-Changing Company\nWe build data platforms.",
+    "lists": [{"text": "What you'll do", "content": "<li>Build models</li><li>Ship features</li>"}],
+    "additionalPlain": "Benefits apply.",
+    "hostedUrl": "https://jobs.lever.co/acme/6ed76ce8-4156-4b60-b120-403538bd66cd",
+    "applyUrl": "https://jobs.lever.co/acme/6ed76ce8-4156-4b60-b120-403538bd66cd/apply"
+  },
+  {
+    "id": "aaaa0000-0000-0000-0000-000000000001",
+    "text": "Machine Learning Engineer",
+    "categories": {"location": "Singapore, Singapore", "allLocations": ["Singapore, Singapore"]},
+    "createdAt": 1785412800000,
+    "workplaceType": "remote",
+    "descriptionPlain": "Remote role listed in Singapore.",
+    "hostedUrl": "https://jobs.lever.co/acme/aaaa0000-0000-0000-0000-000000000001"
+  },
+  {
+    "id": "aaaa0000-0000-0000-0000-000000000002",
+    "text": "Engineering Manager, ML Platform",
+    "categories": {"location": "Palo Alto, CA"},
+    "createdAt": 1785412800000,
+    "descriptionPlain": "Management.",
+    "hostedUrl": "https://jobs.lever.co/acme/aaaa0000-0000-0000-0000-000000000002"
+  },
+  {
+    "id": "aaaa0000-0000-0000-0000-000000000003",
+    "text": "Applied Scientist",
+    "categories": {"location": "Palo Alto, CA"},
+    "createdAt": 1785000000000,
+    "descriptionPlain": "Stale.",
+    "hostedUrl": "https://jobs.lever.co/acme/aaaa0000-0000-0000-0000-000000000003"
+  }
+]
