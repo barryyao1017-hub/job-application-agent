@@ -97,6 +97,10 @@ def standard_routes() -> dict[str, object]:
         f"{WORKDAY_API}/job/2-Locations/Senior-Deep-Learning-Engineer_JR2021785": "workday-detail-JR2021785.json",
         f"{WORKDAY_API}/job/China-Shanghai/Machine-Learning-Engineer---Humanoid-Robotics_JR2016809": "workday-detail-JR2016809.json",
         "https://www.amazon.jobs/en/search.json": "amazon-page-0.json",
+        **{
+            f"https://boards-api.greenhouse.io/v1/boards/acme/jobs/{job['id']}": job
+            for job in fixture("greenhouse.json")["jobs"]
+        },
     }
 
 
@@ -124,10 +128,16 @@ class FeedParserTests(unittest.TestCase):
     def test_greenhouse_board(self) -> None:
         candidates, stats, fetch = run_board(GREENHOUSE)
 
-        self.assertEqual(fetch.urls(), ["https://boards-api.greenhouse.io/v1/boards/acme/jobs?content=true"])
-        self.assertEqual(sorted(c["ats_job_id"] for c in candidates), ["5456619008", "5456619012"])
+        self.assertEqual(
+            fetch.urls(),
+            [
+                "https://boards-api.greenhouse.io/v1/boards/acme/jobs",
+                "https://boards-api.greenhouse.io/v1/boards/acme/jobs/5456619008",
+            ],
+            "the list is fetched without content; details only for kept postings",
+        )
+        self.assertEqual(sorted(c["ats_job_id"] for c in candidates), ["5456619008"])
         ranking = next(c for c in candidates if c["ats_job_id"] == "5456619008")
-        remote = next(c for c in candidates if c["ats_job_id"] == "5456619012")
         self.assert_discovered_shape(ranking)
         self.assertEqual(ranking["company"], "Acme")
         self.assertEqual(ranking["ats"], "greenhouse")
@@ -137,21 +147,21 @@ class FeedParserTests(unittest.TestCase):
         self.assertEqual(ranking["posted_at"], "2026-07-30T10:00:00+00:00")
         self.assertNotIn("posted_at_precision", ranking)
         self.assertEqual(ranking["description"], "Build ranking models with PyTorch.\n2+ years of experience")
-        self.assertTrue(remote["remote"], "Remote per Greenhouse 'Location Type' metadata")
         self.assertEqual(stats["fetched"], 6)
-        self.assertEqual(stats["kept"], 2)
-        self.assertEqual(stats["skipped"], {"title": 2, "stale": 1, "location": 1, "undated": 0})
+        self.assertEqual(stats["kept"], 1)
+        self.assertEqual(
+            stats["skipped"],
+            {"title": 2, "stale": 1, "location": 2, "undated": 0},
+            "London on-site and Toronto remote are both outside the US",
+        )
         self.assertEqual(stats["errors"], [])
 
     def test_lever_board(self) -> None:
         candidates, stats, fetch = run_board(LEVER)
 
         self.assertEqual(fetch.urls(), ["https://api.lever.co/v0/postings/acme?mode=json"])
-        self.assertEqual(
-            sorted(c["title"] for c in candidates), ["Data Scientist, Product", "Machine Learning Engineer"]
-        )
+        self.assertEqual(sorted(c["title"] for c in candidates), ["Data Scientist, Product"])
         product = next(c for c in candidates if c["title"] == "Data Scientist, Product")
-        singapore = next(c for c in candidates if c["title"] == "Machine Learning Engineer")
         self.assert_discovered_shape(product)
         self.assertEqual(product["ats"], "lever")
         self.assertEqual(product["ats_job_id"], "6ed76ce8-4156-4b60-b120-403538bd66cd")
@@ -161,24 +171,26 @@ class FeedParserTests(unittest.TestCase):
         self.assertIn("What you'll do", product["description"])
         self.assertIn("Build models", product["description"])
         self.assertIn("Benefits apply.", product["description"])
-        self.assertTrue(singapore["remote"], "workplaceType remote keeps a non-preferred location")
-        self.assertEqual(stats["skipped"], {"title": 1, "stale": 1, "location": 0, "undated": 0})
+        self.assertEqual(
+            stats["skipped"],
+            {"title": 1, "stale": 1, "location": 1, "undated": 0},
+            "a remote posting located in Singapore is not a US remote option",
+        )
 
     def test_ashby_board(self) -> None:
         candidates, stats, fetch = run_board(ASHBY)
 
         self.assertEqual(fetch.urls(), ["https://api.ashbyhq.com/posting-api/job-board/acme"])
-        self.assertEqual(sorted(c["title"] for c in candidates), ["Applied AI Engineer", "Data Scientist"])
+        self.assertEqual(sorted(c["title"] for c in candidates), ["Applied AI Engineer"])
         applied = next(c for c in candidates if c["title"] == "Applied AI Engineer")
-        paris = next(c for c in candidates if c["title"] == "Data Scientist")
         self.assert_discovered_shape(applied)
         self.assertEqual(applied["ats"], "ashby")
         self.assertEqual(applied["location"], "San Francisco | Seattle")
         self.assertEqual(applied["source_url"], "https://jobs.ashbyhq.com/acme/8fb1615c-34bf-47c4-a1d1-b7b2f836bbd3")
         self.assertEqual(applied["description"], "ABOUT\n\nShip LLM features.")
-        self.assertTrue(paris["remote"])
         self.assertEqual(stats["fetched"], 3, "unlisted postings are not counted")
         self.assertEqual(stats["skipped"]["title"], 1)
+        self.assertEqual(stats["skipped"]["location"], 1, "Paris with isRemote is not a US remote option")
 
     def test_workday_board_maps_relative_dates_and_fetches_details_for_kept_only(self) -> None:
         candidates, stats, fetch = run_board(WORKDAY)
@@ -303,7 +315,7 @@ class FeedRunTests(unittest.TestCase):
         self.assertEqual(
             {c["company"] for c in candidates}, {"Acme", "Acme Ashby", "Acme Workday", "Amazon"}
         )
-        self.assertEqual(len(candidates), 2 + 2 + 2 + 1)
+        self.assertEqual(len(candidates), 1 + 1 + 2 + 1)
         self.assertEqual(candidates, sorted(candidates, key=lambda c: c["posted_at"], reverse=True))
         for entry in stats:
             self.assertIn("seconds", entry)
@@ -311,7 +323,7 @@ class FeedRunTests(unittest.TestCase):
     def test_candidates_are_deduplicated_by_url(self) -> None:
         fetch = FakeFetch(standard_routes())
         candidates, _ = fetch_feeds([GREENHOUSE, {**GREENHOUSE, "company": "Acme Again"}], CONFIG, now=NOW, fetch=fetch)
-        self.assertEqual(len(candidates), 2)
+        self.assertEqual(len(candidates), 1)
 
     def test_output_is_accepted_by_the_ledger_and_scores(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -325,20 +337,20 @@ class FeedRunTests(unittest.TestCase):
             )
 
             self.assertEqual(payload["out"], str(out))
-            self.assertEqual(payload["kept"], 5)
+            self.assertEqual(payload["kept"], 4)
             self.assertEqual(payload["boards_with_errors"], 0)
             self.assertEqual(payload["queries"], list(DEFAULT_QUERIES))
             self.assertEqual([b["company"] for b in payload["boards"]], ["Acme", "Acme Workday", "Amazon"])
             written = json.loads(out.read_text(encoding="utf-8"))
-            self.assertEqual(len(written), 5)
+            self.assertEqual(len(written), 4)
 
             connection = connect_db(root / "ledger.sqlite3")
             run_id = create_run(connection)
             ingested = ingest_candidates(connection, written, run_id)
-            self.assertEqual(len(ingested["inserted"]), 5)
+            self.assertEqual(len(ingested["inserted"]), 4)
             self.assertEqual(ingested["duplicates"], [])
             rows = connection.execute("SELECT source, ats_job_id, company FROM jobs ORDER BY company, ats_job_id").fetchall()
-            self.assertEqual([row[0] for row in rows], ["ats-api"] * 5)
+            self.assertEqual([row[0] for row in rows], ["ats-api"] * 4)
             self.assertIn(("ats-api", "JR2021784", "Acme Workday"), [tuple(row) for row in rows])
             self.assertIn(("ats-api", "10578465", "Amazon"), [tuple(row) for row in rows])
 
@@ -372,10 +384,10 @@ class FeedRunTests(unittest.TestCase):
                     )
             self.assertEqual(status, 0)
             printed = json.loads(buffer.getvalue())
-            self.assertEqual(printed["kept"], 2)
+            self.assertEqual(printed["kept"], 1)
             self.assertEqual(printed["queries"], ["machine learning engineer"])
             self.assertEqual(printed["boards"][0]["company"], "Acme Ashby")
-            self.assertEqual(len(json.loads(out.read_text(encoding="utf-8"))), 2)
+            self.assertEqual(len(json.loads(out.read_text(encoding="utf-8"))), 1)
 
     def test_cli_reports_missing_registry_as_json_error(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -436,6 +448,58 @@ class RegistryTests(unittest.TestCase):
         script = (ROOT / "scripts" / "run-automation.sh").read_text(encoding="utf-8")
         self.assertIn("Bash(python3 -m job_agent:*)", script)
         self.assertIn("fetch-feeds", script)
+
+
+class TitleFilterTests(unittest.TestCase):
+    def test_customer_facing_and_management_titles_are_excluded(self) -> None:
+        from job_agent.feeds import title_matches
+
+        for title in (
+            "Applied Machine Learning Engineer - AI for VLSI Design",
+            "Senior Applied Scientist, Risk",
+            "Data Scientist, Product",
+            "Forward Deployed Engineer (AI Enablement)",
+        ):
+            self.assertTrue(title_matches(title, CONFIG), title)
+        for title in (
+            "Business Development Manager, Cloud & AI",
+            "Senior Account Executive, AI Labs",
+            "Sr. Customer Success Specialist, Applied AI",
+            "Senior Technical Program Manager, Ads AI Core Infrastructure",
+            "Manager, Software Engineering - AI Infrastructure",
+            "FP&A AI Architect",
+            "Solutions Architect, AI Infrastructure",
+            "Software Engineer, Payments",
+        ):
+            self.assertFalse(title_matches(title, CONFIG), title)
+
+
+class LocationFilterTests(unittest.TestCase):
+    CONFIG = {"preferred_location_terms": ["california", "seattle", "remote", ", ca", ", wa"]}
+
+    def check(self, location: str, remote: bool = False) -> bool:
+        from job_agent.feeds import location_matches
+
+        return location_matches(location, remote, self.CONFIG)
+
+    def test_preferred_and_us_remote_locations_match(self) -> None:
+        self.assertTrue(self.check("US, CA, Santa Clara"))
+        self.assertTrue(self.check("Seattle, WA | New York, NY"))
+        self.assertTrue(self.check("Remote"))
+        self.assertTrue(self.check("US, TX, Remote"))
+        self.assertTrue(self.check("Austin, TX", remote=True))
+        self.assertTrue(self.check(""))
+
+    def test_foreign_locations_do_not_match_even_when_remote(self) -> None:
+        self.assertFalse(self.check("Paris, France", remote=True))
+        self.assertFalse(self.check("Switzerland, Zurich | UK, Remote | Switzerland, Remote"))
+        self.assertFalse(self.check("London, United Kingdom"))
+        self.assertFalse(self.check("Toronto, Canada - Remote"))
+        self.assertFalse(self.check("Austin, TX"))
+
+    def test_one_us_option_among_foreign_ones_is_enough(self) -> None:
+        self.assertTrue(self.check("UK, Remote | US, CA, Remote"))
+        self.assertTrue(self.check("Bangalore, India | San Francisco, CA"))
 
 
 if __name__ == "__main__":

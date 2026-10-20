@@ -193,6 +193,14 @@ def epoch_millis(value: Any) -> datetime | None:
 # --- Filters -------------------------------------------------------------------
 
 
+NON_ENGINEERING_TITLE_PATTERN = re.compile(
+    r"\b(?:manager|account executive|sales|business development|customer success|customer engineer|"
+    r"solutions? architect|solutions? engineer|marketing|recruit(?:er|ing)|talent|fp&a|finance|"
+    r"accountant|legal|counsel|partnerships?|support engineer|technical writer|designer|evangelist|"
+    r"advocate|specialist)\b"
+)
+
+
 def title_matches(title: str, config: dict[str, Any]) -> bool:
     """True when the title reads as an ML/Data individual-contributor role.
 
@@ -206,21 +214,45 @@ def title_matches(title: str, config: dict[str, Any]) -> bool:
         return False
     if any(term in lower for term in MANAGEMENT_TITLE_TERMS):
         return False
+    if NON_ENGINEERING_TITLE_PATTERN.search(lower):
+        return False
     if ML_SIGNAL_PATTERN.search(lower):
         return True
     return any(str(term).lower() in lower for term in config.get("role_keywords", ()))
 
 
+NON_US_LOCATION_PATTERN = re.compile(
+    r"\b(?:uk|u\.k\.|united kingdom|england|london|ireland|dublin|france|paris|germany|berlin|munich|"
+    r"switzerland|zurich|netherlands|amsterdam|spain|madrid|barcelona|italy|milan|sweden|stockholm|"
+    r"poland|warsaw|israel|tel aviv|india|bangalore|bengaluru|hyderabad|china|shanghai|beijing|shenzhen|"
+    r"taiwan|taipei|japan|tokyo|korea|seoul|singapore|australia|sydney|melbourne|canada|toronto|"
+    r"vancouver|montreal|brazil|s[aã]o paulo|mexico|emea|apac|latam|europe)\b"
+)
+US_LOCATION_PATTERN = re.compile(r"\b(?:us|u\.s\.|usa|united states|north america)\b")
+
+
 def location_matches(location: str, remote: bool, config: dict[str, Any]) -> bool:
+    """True when at least one listed location is a preferred one or a US remote option.
+
+    Boards list several locations separated by " | ". A remote option only counts
+    when its part does not name a non-US country or city (``"UK, Remote"`` and
+    ``"Paris, France"`` with a remote flag are rejected; ``"US, TX, Remote"`` and a
+    bare ``"Remote"`` are accepted).
+    """
     lower = location.lower()
-    if remote or "remote" in lower:
-        return True
     if not lower.strip():
         return True
-    return any(
-        location_term_pattern(str(term)).search(lower)
-        for term in config.get("preferred_location_terms", ())
-    )
+    preferred = [location_term_pattern(str(term)) for term in config.get("preferred_location_terms", ())]
+    for part in (piece.strip() for piece in lower.split("|")):
+        if not part:
+            continue
+        if NON_US_LOCATION_PATTERN.search(part) and not US_LOCATION_PATTERN.search(part):
+            continue
+        if remote or "remote" in part or "virtual" in part:
+            return True
+        if any(pattern.search(part) for pattern in preferred):
+            return True
+    return False
 
 
 def is_recent(posted_at: datetime | None, now: datetime, config: dict[str, Any]) -> bool:
@@ -316,9 +348,19 @@ class BoardResult:
         title: str,
         posted_at: datetime | None,
         build: Callable[[], dict[str, Any]],
+        location: str | None = None,
+        remote: bool = False,
     ) -> bool:
-        """Apply the shared filters; call ``build`` (which may fetch details) only for survivors."""
+        """Apply the shared filters; call ``build`` (which may fetch details) only for survivors.
+
+        Pass ``location``/``remote`` when the listing already carries them so that
+        a detail fetch inside ``build`` is skipped for postings outside the preferred
+        locations; ``admit`` checks the built candidate's location either way.
+        """
         if not self.prefilter(config, now, title, posted_at):
+            return False
+        if location is not None and not location_matches(location, remote, config):
+            self.skipped["location"] += 1
             return False
         return self.admit(config, build())
 
@@ -343,7 +385,8 @@ def fetch_greenhouse(
 ) -> BoardResult:
     result = BoardResult(entry)
     token = urllib.parse.quote(str(entry["token"]))
-    payload = fetch(f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true", None)
+    board_url = f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs"
+    payload = fetch(board_url, None)  # the list omits descriptions; fetched per kept job below
     for job in payload.get("jobs") or []:
         posted_at = parse_datetime(job.get("first_published") or job.get("updated_at"))
         location_name = str((job.get("location") or {}).get("name") or "")
@@ -360,12 +403,9 @@ def fetch_greenhouse(
             for item in job.get("metadata") or []
             if isinstance(item, dict) and "location" in str(item.get("name") or "").lower()
         )
-        result.consider(
-            config,
-            now,
-            title=str(job.get("title") or ""),
-            posted_at=posted_at,
-            build=lambda job=job, location=location, remote=remote, posted_at=posted_at: make_candidate(
+        def build(job=job, location=location, remote=remote, posted_at=posted_at) -> dict[str, Any]:
+            detail = fetch(f"{board_url}/{urllib.parse.quote(str(job.get('id')))}", None)
+            return make_candidate(
                 company=entry["company"],
                 ats="greenhouse",
                 title=str(job.get("title") or ""),
@@ -373,9 +413,18 @@ def fetch_greenhouse(
                 location=location,
                 remote=remote,
                 posted_at=posted_at,
-                description=strip_html(job.get("content")),
+                description=strip_html(detail.get("content") or job.get("content")),
                 ats_job_id=job.get("id"),
-            ),
+            )
+
+        result.consider(
+            config,
+            now,
+            title=str(job.get("title") or ""),
+            posted_at=posted_at,
+            build=build,
+            location=location,
+            remote=remote,
         )
     return result
 

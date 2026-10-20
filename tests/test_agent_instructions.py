@@ -106,6 +106,19 @@ class AgentInstructionTests(unittest.TestCase):
         script = (ROOT / "scripts" / "run-automation.sh").read_text(encoding="utf-8")
         self.assertIn("mcp__claude_ai_Gmail__search_threads", script)
 
+    def test_discovery_uses_registry_feeds_not_linkedin(self) -> None:
+        pipeline = PIPELINE_SKILL.read_text(encoding="utf-8")
+
+        self.assertIn("### 2. Discover recent roles", pipeline)
+        self.assertIn(
+            "python3 -m job_agent fetch-feeds --registry data/company-registry.json --out artifacts/YYYY-MM-DD/discovered.json",
+            pipeline,
+        )
+        self.assertIn("Do not browse LinkedIn or any job board in Chrome to discover roles", pipeline)
+        self.assertNotIn("signed-in Chrome LinkedIn session", pipeline)
+        self.assertNotIn('"source": "linkedin"', pipeline)
+        self.assertTrue((ROOT / "data" / "company-registry.example.json").is_file())
+
     def test_subagents_are_named_as_referenced(self) -> None:
         self.assertIn("name: application-worker\n", APPLICATION_WORKER.read_text(encoding="utf-8"))
         scorer = FIT_SCORER.read_text(encoding="utf-8")
