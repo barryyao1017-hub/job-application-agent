@@ -5,8 +5,7 @@ native-host/resume-native-host
 local-resume-companion-extension/native-host/resume-native-host
 *.docx
 *.pdf
-/data/*
-!/data/company-registry.example.json
+/data
 /artifacts
 *.sqlite3
 __pycache__/

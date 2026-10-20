@@ -38,7 +38,7 @@ Discovery is a ledger command, not a browser task. Run:
 python3 -m job_agent fetch-feeds --registry data/company-registry.json --out artifacts/YYYY-MM-DD/discovered.json
 ```
 
-It pulls the Greenhouse, Lever, Ashby, Workday and Amazon job boards listed in `data/company-registry.json` (private, gitignored; template in `data/company-registry.example.json`), keeps ML/Data individual-contributor postings from the past `recency_hours` whose location is preferred or US-remote, and writes the discovery array. Each item has this shape:
+It pulls the Greenhouse, Lever, Ashby, Workday and Amazon job boards listed in `data/company-registry.json` (private, gitignored; template `company-registry.example.json` at the repo root), keeps ML/Data individual-contributor postings from the past `recency_hours` whose location is preferred or US-remote, and writes the discovery array. Each item has this shape:
 
 ```json
 {

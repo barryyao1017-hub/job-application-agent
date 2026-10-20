@@ -117,7 +117,7 @@ class AgentInstructionTests(unittest.TestCase):
         self.assertIn("Do not browse LinkedIn or any job board in Chrome to discover roles", pipeline)
         self.assertNotIn("signed-in Chrome LinkedIn session", pipeline)
         self.assertNotIn('"source": "linkedin"', pipeline)
-        self.assertTrue((ROOT / "data" / "company-registry.example.json").is_file())
+        self.assertTrue((ROOT / "company-registry.example.json").is_file())
 
     def test_subagents_are_named_as_referenced(self) -> None:
         self.assertIn("name: application-worker\n", APPLICATION_WORKER.read_text(encoding="utf-8"))
