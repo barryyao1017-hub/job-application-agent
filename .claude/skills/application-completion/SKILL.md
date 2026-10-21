@@ -33,7 +33,7 @@ Use this procedure only when authentication is required to reach the application
       - `ok`: continue the application.
       - `origin_mismatch` while on the company's real login page on another domain: call `add_site_domain(account_id)` once, then retry `login` once if it returns `ok`.
       - `no_login_form`: navigate to the site's sign-in form and retry once.
-      - `needs_approval`, `denied`, `2fa_unsupported`, or `error`: stop and block with `blocker_category: "login_credentials_unavailable"`, putting the status and message in `blocker_message`. For `error`, also run `uv --directory /Users/jiayiyao/Desktop/agent-vault run agent-vault doctor` and include its summary.
+      - `needs_approval`, `denied`, `2fa_unsupported`, or `error`: stop and block with `blocker_category: "login_credentials_unavailable"`, putting the status and message in `blocker_message`. For `error`, also run `uv --directory /Users/jiayiyao/Desktop/agent-vault run agent-vault doctor` and include its summary; its "BW_SESSION not set in this shell" line is about the worker's shell, not the MCP server, so don't report it as a locked vault.
 3. Otherwise, use Chrome's saved-login autofill for the authentication origin. Use at most one matching saved login without revealing its secret, and attempt it once.
 4. Otherwise, if the site offers account creation (**Create Account**, **Sign Up**, **Register**), create the account with agent-vault. It fills the configured email and a generated password, saves the login to Bitwarden before submitting, and opens verification links itself.
    1. Open the site's create-account page in the application tab.
