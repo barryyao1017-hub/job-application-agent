@@ -1,6 +1,6 @@
 ---
 name: job-application-pipeline
-description: "Orchestrate the local daily job-search pilot: discover recent ML/Data roles from the company registry's ATS job feeds, apply documented company-specific routing policies, validate canonical ATS pages, deduplicate and score jobs, route eligible applications through strict login gates (existing credentials or an account agent-vault creates), delegate sequential application work that submits when enabled, analyze blockers into to-dos, check Gmail for recruiter replies, and report a privacy-minimal summary. Use for scheduled or manual discovery runs, queued application processing, login-gated applications, stale-claim recovery, and daily job-application summaries."
+description: "Orchestrate the local daily job-search pilot: discover recent ML/Data roles from the company registry's ATS job feeds, apply documented company-specific routing policies, validate canonical ATS pages, deduplicate and score jobs, route eligible applications through strict login gates (existing credentials or an account agent-vault creates), delegate application work to parallel workers that submit when enabled, analyze blockers into to-dos, check Gmail for recruiter replies, and report a privacy-minimal summary. Use for scheduled or manual discovery runs, queued application processing, login-gated applications, stale-claim recovery, and daily job-application summaries."
 ---
 
 # Daily Job Application Pipeline
@@ -11,16 +11,16 @@ Run from the repository root. Invoking this skill, including from the scheduled 
 
 - Act only as the orchestrator: recover state, discover and score roles, manage claims, route work, record lean worker results, and report the run.
 - Never interpret profile information, answer application questions, operate application forms, attach a résumé, or decide whether a form question is answerable.
-- Use the Agent tool with `subagent_type: "application-worker"` to start one fresh worker for each claimed job and let it handle exactly that job. Process workers sequentially for now; the résumé attach step (`file_upload`) no longer requires it, but the Local Resume Companion fallback has a single-slot queue and concurrent Chrome tab ownership has not been forward-tested (see "Application-worker concurrency").
+- Use the Agent tool with `subagent_type: "application-worker"` to start one fresh worker for each claimed job and let it handle exactly that job. Run up to `max_parallel_workers` of them at once (see "Application-worker concurrency").
 - In the worker's initial prompt, require it to fully read and follow the repository-local `application-completion` skill at `.claude/skills/application-completion/SKILL.md`, including its required `application-profile.md`. Treat that skill as authoritative for profile use, form behavior, authentication, completion, blocking, tab preservation, and output.
-- Pass the worker only job-routing information: job ID, company, role, and application URL or opened tab. Do not summarize or reinterpret the profile, suggest answers, or add job-specific form-filling guidance.
+- Pass the worker only job-routing information: job ID, company, role, and application URL. Do not summarize or reinterpret the profile, suggest answers, or add job-specific form-filling guidance.
 - Submission is the worker's job, never the orchestrator's. `claim` returns `submit: true` only while `config.json` has `submit_applications: true`; pass that value to the worker unchanged. With `submit: false`, workers stop at Review.
 - Never assign a job with `manual_review` status to an application worker.
 - Never override or extend a worker's authentication procedure. Record an authentication blocker, preserve its live tab, and continue the queue.
 - Send email only with the Gmail `send_message` tool and only to the exact `notification_email` in `config.json`.
 - Never include contact data, demographic answers, authorization answers, résumé content, screenshots, or attachments in email.
 - Gmail is read-only apart from that one summary email: never reply to, label, archive, or forward a recruiter message.
-- Parallel agents may analyze descriptions only.
+- Apart from application workers, parallel agents may analyze descriptions only.
 
 ## Daily workflow
 
@@ -81,7 +81,7 @@ python3 -m job_agent score --run-id RUN_ID
 
 Pass the `RUN_ID` from `fetch-feeds` to `discover`, so the jobs and the discovery stats share one run. If discovery failed and there is no `RUN_ID` yet, omit `--run-id` and use the one `discover` returns. The CLI performs hard filters, scoring, deduplication, company-policy routing, and queues every eligible candidate scoring at least `minimum_fit_score`; there is no daily cap. A `manual_review` result is deliberately excluded from the application queue.
 
-### 4. Delegate applications sequentially
+### 4. Delegate applications to parallel workers
 
 After each non-null claim, start a fresh `application-worker` with that job's routing information. Its prompt must say:
 
@@ -89,12 +89,12 @@ After each non-null claim, start a fresh `application-worker` with that job's ro
 
 Replace `SUBMIT` with the claim's `submit` value.
 
-Then process the queue:
+Then process the queue with up to `SLOTS` workers at a time, where `SLOTS` is `max_parallel_workers` from `config.json` (default 2, at most 3). Slot `N` uses worker id `daily-browser-worker-N` for its claims and for recording its results.
 
-1. Run `python3 -m job_agent claim --worker-id daily-browser-worker --run-id RUN_ID`. Each claim is logged as one application attempt for this run.
-2. If the result is `null`, stop application work.
-3. Start a fresh worker with the required prompt and pass only the job ID, company, role, application URL or opened tab, and the claim's `submit` value.
-4. Run the worker in the foreground and wait for it to finish before claiming or assigning another job. Do not stop a form worker merely because it is slow; stopping it can release or close its controlled tab.
+1. For each free slot, run `python3 -m job_agent claim --worker-id daily-browser-worker-N --run-id RUN_ID`. Each claim is logged as one application attempt for this run. `claim` never hands out a job from a company that already has a claimed job, so parallel workers never sign in to or create the same company's account at once.
+2. If a claim returns `null`, leave that slot empty. When every slot is empty, stop application work. A `null` can also mean the remaining queued jobs belong to companies in progress, so claim again for empty slots each time a worker finishes.
+3. For each non-null claim, start a fresh worker with the required prompt and pass only the job ID, company, role, application URL, and the claim's `submit` value. Pass the URL, never an already opened tab: each worker opens and owns its own tab. Start the workers for all newly filled slots in one message, one Agent call each, so they run at the same time.
+4. When a worker finishes, handle its result (steps 5–7), then claim for its slot again (step 1) and start the next worker, so at most `SLOTS` run at once. Do not stop a form worker merely because it is slow; stopping it can release or close its controlled tab. Do not touch a running worker's tab.
 5. Require the worker to return one JSON object:
 
 ```json
@@ -120,40 +120,37 @@ Then process the queue:
    - Do not require screenshots, answer manifests, tab titles, or duplicated résumé filenames.
    - If tab preservation is false, use SendMessage to ask the same worker to reclaim or reopen the tab and restore the completed state before recording the result or moving on.
 7. Record the result with the appropriate ledger command.
-8. Claim the next job and repeat steps 2–7 with a fresh worker.
+8. Claim the next job for the freed slot and repeat with a fresh worker.
 
 For a `submitted` result, call:
 
 ```bash
-python3 -m job_agent submit --job-id JOB_ID --worker-id daily-browser-worker --confirmation-url URL --evidence "CONFIRMATION_EVIDENCE" --resume-verified
+python3 -m job_agent submit --job-id JOB_ID --worker-id daily-browser-worker-N --confirmation-url URL --evidence "CONFIRMATION_EVIDENCE" --resume-verified
 ```
 
 For a `ready_for_review` result, call:
 
 ```bash
-python3 -m job_agent complete --job-id JOB_ID --worker-id daily-browser-worker --review-url URL --resume-verified
+python3 -m job_agent complete --job-id JOB_ID --worker-id daily-browser-worker-N --review-url URL --resume-verified
 ```
 
 For a `blocked` result, call:
 
 ```bash
-python3 -m job_agent block --job-id JOB_ID --worker-id daily-browser-worker --category CATEGORY --message MESSAGE --review-url URL
+python3 -m job_agent block --job-id JOB_ID --worker-id daily-browser-worker-N --category CATEGORY --message MESSAGE --review-url URL
 ```
 
-Reject malformed worker output and use SendMessage to ask the same worker to correct it before recording a result. Continue to the next queued job only after the current result is recorded and its live tab is preserved. Close a submitted application's tab once its result is recorded, since nothing is left to review there. Keep no more than five ready or blocked application tabs; close discovery and intermediate tabs.
+Use the worker id of the slot that claimed the job. Reject malformed worker output and use SendMessage to ask the same worker to correct it before recording a result. Refill a slot only after its result is recorded and its live tab is preserved. Close a submitted application's tab once its result is recorded, since nothing is left to review there. Keep no more than five ready or blocked application tabs; close discovery and intermediate tabs.
 
 ### Application-worker concurrency
 
-Claude can run multiple one-job application workers, and the default résumé attach step no longer forces sequencing: `mcp__claude-in-chrome__file_upload` reads the file per call and targets one `ref` in one `tabId`, with no shared state between workers. Two blockers remain before workers may run concurrently:
+Application workers share one Chrome but nothing else they could clobber:
 
-- The Local Resume Companion fallback has a single-slot queue: every enqueue overwrites one shared `attach-target-url.txt`, and the native host consumes that single instruction after one claim. Two workers falling back at once would clobber each other.
-- Concurrent Chrome tab ownership has not been forward-tested. Each worker must pin its own `tabId` in every browser call, and that discipline has not yet been verified with two workers in the same Chrome.
+- Each worker opens its own tab and pins that `tabId` in every browser call, and passes its tab's full URL as agent-vault's `tab_hint`, so logins and sign-ups fill only its own tab.
+- The résumé is attached with `file_upload`, which reads the file per call and targets one ref in one tab. The Local Resume Companion fallback keeps one queue entry per request under `attach-queue/` and hands each to the page whose URL matches it, so concurrent fallbacks do not overwrite each other.
+- `claim` is atomic and skips companies that already have a claimed job, so two workers never share one company's account.
 
-Therefore:
-
-- Use a fresh worker per job.
-- Run those workers sequentially.
-- Do not enable parallel form work until the fallback is retired or given per-worker leases and concurrent tab ownership has been forward-tested.
+Keep `max_parallel_workers` small (2 by default, at most 3): every worker drives the same Chrome window, and a page's blocking alert or a slow site can stall the browser for all of them. If a run shows browser-tool timeouts or `connection lost` errors from two or more workers at once, set `max_parallel_workers` to 1 for the next run, which restores one-at-a-time processing, and add a to-do.
 
 ### 5. Analyze blockers and file to-dos
 

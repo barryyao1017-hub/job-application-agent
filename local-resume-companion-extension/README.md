@@ -2,7 +2,7 @@
 
 Local Chrome extension that attaches one user-configured approved résumé to a clearly labeled required Resume/CV input. It never submits an application or targets Cover Letter.
 
-**Fallback only.** Since October 2026 the application worker attaches the résumé with Claude in Chrome's `file_upload` tool (see section 5 of `.claude/skills/application-completion/SKILL.md`; trial and timing in `../RESUME_FILE_UPLOAD_TRIAL.md`). The worker queues a request here only when no file input can be found or surfaced, or `file_upload` has errored twice. The single-slot queue below is one reason workers still run one at a time.
+**Fallback only.** Since October 2026 the application worker attaches the résumé with Claude in Chrome's `file_upload` tool (see section 5 of `.claude/skills/application-completion/SKILL.md`; trial and timing in `../RESUME_FILE_UPLOAD_TRIAL.md`). The worker queues a request here only when no file input can be found or surfaced, or `file_upload` has errored twice.
 
 ## Quick Start (macOS)
 
@@ -21,10 +21,8 @@ The extension source is cross-platform, but the included installer currently sup
 
 For autonomous use, the application bot queues one exact target page with `node enqueue-attach.js "APPLICATION_URL"`. When that page contains one clearly labeled Resume/CV upload field, the extension attaches the approved résumé automatically. The instruction is consumed after one use.
 
-## Concurrency limitation
+## Concurrent workers
 
-The current attachment queue is a single file containing one URL. Each enqueue replaces the prior URL, and the native host consumes that instruction after one successful attachment.
+Each enqueue writes its own file to `attach-queue/` (write, then rename, so the host never reads half an entry). When a page asks for the résumé, the native host looks for an entry whose URL the page's URL contains and claims it by renaming it to a name unique to that host process; `rename` is atomic, so if two hosts race for one entry exactly one wins. The entry is deleted once the reply is built, or put back if it could not be. Entries older than 30 minutes are dropped. The host still honors the old single-slot `attach-target-url.txt`, so a checkout that predates the queue keeps working.
 
-- Multiple one-job application workers are supported when they run sequentially.
-- Concurrent application workers are not safe: their enqueue operations can overwrite one another, attach to the wrong worker's timing window, or leave one form without a résumé.
-- Keep application-form workers sequential until the queue is redesigned as an atomic multi-entry queue or uses per-worker leases.
+Several application workers can therefore use the fallback at once, as long as each queues its own page's exact URL. `tests/test_resume_queue.py` compiles the host and checks matching, the race, expiry and the legacy file.

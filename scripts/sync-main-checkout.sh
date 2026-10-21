@@ -4,13 +4,13 @@
 # checkout is a detached git worktree, which leaves `main` free to check out
 # elsewhere. Private, gitignored state stays in the primary checkout and is
 # linked in: one ledger, and the résumé native host is compiled to read
-# config.json and attach-target-url.txt from the primary checkout.
+# config.json and the attach-queue/ directory from the primary checkout.
 # Usage: scripts/sync-main-checkout.sh   (prints the checkout path and commit)
 set -euo pipefail
 
 PRIMARY="${PRIMARY:-$HOME/code/job-application-agent}"
 CHECKOUT="${CHECKOUT:-$HOME/code/job-application-agent-main}"
-SHARED=(config.json data artifacts local-resume-companion-extension/attach-target-url.txt)
+SHARED=(config.json data artifacts local-resume-companion-extension/attach-target-url.txt local-resume-companion-extension/attach-queue)
 
 git -C "$PRIMARY" fetch --quiet origin main ||
   echo "warning: fetch failed; using the last fetched origin/main" >&2
@@ -23,6 +23,8 @@ if [ -n "$(git -C "$CHECKOUT" status --porcelain --untracked-files=no)" ]; then
   exit 1
 fi
 git -C "$CHECKOUT" checkout --quiet --detach origin/main
+# enqueue-attach.js writes into the linked queue, so it must exist.
+mkdir -p -m 700 "$PRIMARY/local-resume-companion-extension/attach-queue"
 
 for path in "${SHARED[@]}"; do
   link="$CHECKOUT/$path"

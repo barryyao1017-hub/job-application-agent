@@ -66,7 +66,7 @@ class AgentInstructionTests(unittest.TestCase):
         self.assertIn('`spl-dropzone[data-test="resume-upload"]`', skill)
         self.assertIn("`iframe#grnhse_iframe`", skill)
         self.assertIn("Fall back to Local Resume Companion only when", skill)
-        self.assertIn("The extension's queue is single-slot", skill)
+        self.assertIn("Each enqueue adds its own entry to `attach-queue/`", skill)
         self.assertIn("Report `resume_verified: true` only then", skill)
         self.assertIn(
             "ready_for_review` result requires `resume_verified: true",
@@ -94,18 +94,32 @@ class AgentInstructionTests(unittest.TestCase):
         self.assertIn("Attach the résumé with `file_upload`", worker)
         self.assertIn("pinning\nyour own tabId", worker)
 
-    def test_worker_concurrency_blockers_are_named(self) -> None:
+    def test_workers_run_in_parallel_without_sharing_state(self) -> None:
         pipeline = PIPELINE_SKILL.read_text(encoding="utf-8")
+        skill = COMPLETION_SKILL.read_text(encoding="utf-8")
         claude_md = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
 
-        self.assertIn("Process workers sequentially for now", pipeline)
-        self.assertIn("no longer requires it", pipeline)
-        self.assertIn("no longer forces sequencing", pipeline)
-        self.assertIn("single-slot queue", pipeline)
-        self.assertIn("has not been forward-tested", pipeline)
-        self.assertNotIn("singleton attachment queue", pipeline)
+        self.assertIn("### 4. Delegate applications to parallel workers", pipeline)
+        self.assertIn("`max_parallel_workers` from `config.json` (default 2, at most 3)", pipeline)
+        self.assertIn("--worker-id daily-browser-worker-N --run-id RUN_ID", pipeline)
+        self.assertIn("one Agent call each, so they run at the same time", pipeline)
+        self.assertIn("each worker opens and owns its own tab", pipeline)
+        self.assertIn("set `max_parallel_workers` to 1 for the next run", pipeline)
+        for removed in (
+            "Process workers sequentially",
+            "Run the worker in the foreground",
+            "Run those workers sequentially",
+            "single-slot queue",
+        ):
+            with self.subTest(removed=removed):
+                self.assertNotIn(removed, pipeline)
+                self.assertNotIn(removed, skill)
+        self.assertIn("open it in a new tab of your own with `tabs_create_mcp`", skill)
+        self.assertIn("set to your tab's full current URL", skill)
+        self.assertIn("never a shorter prefix another worker's page could also match", skill)
         self.assertIn("now the **fallback** attach path", claude_md)
         self.assertIn("`file_upload` first and Local Resume Companion as the fallback", claude_md)
+        self.assertNotIn("one at a time", claude_md)
 
     def test_submission_is_gated_and_confirmed(self) -> None:
         skill = COMPLETION_SKILL.read_text(encoding="utf-8")

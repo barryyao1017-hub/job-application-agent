@@ -108,6 +108,10 @@ def load_config(path: Path | str = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
     config.setdefault("submit_applications", config.get("review_only") is False)
     if not isinstance(config["submit_applications"], bool):
         raise ValueError("submit_applications must be true or false")
+    config.setdefault("max_parallel_workers", 2)
+    workers = config["max_parallel_workers"]
+    if isinstance(workers, bool) or not isinstance(workers, int) or not 1 <= workers <= 3:
+        raise ValueError("max_parallel_workers must be 1, 2 or 3")
     resume_path = Path(config["approved_resume_path"]).expanduser()
     if not resume_path.is_file():
         raise ValueError(f"Approved resume does not exist: {resume_path}")
@@ -647,7 +651,11 @@ def claim_next(
     company_policies_path: Path | str = DEFAULT_COMPANY_POLICIES_PATH,
     run_id: str | None = None,
 ) -> dict[str, Any] | None:
-    """Claim the best queued job and log the attempt against ``run_id`` (default: latest running run)."""
+    """Claim the best queued job and log the attempt against ``run_id`` (default: latest running run).
+
+    A company with a job already claimed is passed over, so parallel workers never
+    sign in to, or create, the same company's account at the same time.
+    """
     policies = load_company_policies(company_policies_path)
     connection.execute("BEGIN IMMEDIATE")
     try:
@@ -673,6 +681,9 @@ def claim_next(
         row = connection.execute(
             """
             SELECT * FROM jobs WHERE status='queued'
+                AND LOWER(TRIM(company)) NOT IN (
+                    SELECT LOWER(TRIM(company)) FROM jobs WHERE status='claimed'
+                )
             ORDER BY fit_score DESC, COALESCE(posted_at, discovered_at) DESC
             LIMIT 1
             """

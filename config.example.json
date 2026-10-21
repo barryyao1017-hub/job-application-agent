@@ -9,6 +9,7 @@
   "minimum_fit_score": 70,
   "company_policies_path": ".claude/skills/company-application-policies/references/policies.json",
   "submit_applications": false,
+  "max_parallel_workers": 2,
   "approved_resume_filename": "Jiayi_Yao_resume.docx",
   "role_keywords": [
     "machine learning engineer",
