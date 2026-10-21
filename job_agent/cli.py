@@ -9,6 +9,7 @@ from typing import Any
 from .core import (
     DEFAULT_CONFIG_PATH,
     DEFAULT_DB_PATH,
+    DEFAULT_RESUME_TEXT_PATH,
     block_job,
     claim_next,
     complete_job,
@@ -24,6 +25,7 @@ from .core import (
     outcome_report,
     record_discovery,
     recover_stale_claims,
+    resume_text,
     score_jobs,
     submit_job,
 )
@@ -68,6 +70,12 @@ def build_parser() -> argparse.ArgumentParser:
     discover = subparsers.add_parser("discover")
     discover.add_argument("--input", type=Path, required=True)
     discover.add_argument("--run-id")
+
+    resume = subparsers.add_parser(
+        "resume-text",
+        help="Write the approved résumé as plain text for job-fit-scorer to read",
+    )
+    resume.add_argument("--out", type=Path, default=DEFAULT_RESUME_TEXT_PATH)
 
     score = subparsers.add_parser("score")
     score.add_argument("--run-id")
@@ -142,6 +150,13 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("Discovery input must be a JSON array")
             run_id = create_run(connection, args.run_id)
             emit(ingest_candidates(connection, candidates, run_id))
+        elif args.command == "resume-text":
+            text = resume_text(config["approved_resume_path"])
+            if not text:
+                raise ValueError("The approved résumé has no extractable text")
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(text + "\n", encoding="utf-8")
+            emit({"path": str(args.out), "characters": len(text)})
         elif args.command == "score":
             emit(score_jobs(connection, config, args.run_id))
         elif args.command == "company-policies":

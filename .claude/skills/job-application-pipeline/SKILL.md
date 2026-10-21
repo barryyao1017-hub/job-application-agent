@@ -70,7 +70,13 @@ For every match, invoke the `company-application-policies` skill, read it fully,
 
 ### 3. Enrich, ingest, and score
 
-Split discovered candidates into at most three batches. Start `job-fit-scorer` agents (Agent tool, `subagent_type: "job-fit-scorer"`) in parallel by sending the calls in one message. They must only read candidate descriptions, the local profile, and résumé; they return corrected JSON with `minimum_years`, `active`, and concise fit evidence. They must not use Chrome or write external state.
+First write the résumé as text for the scorers to read:
+
+```bash
+python3 -m job_agent resume-text
+```
+
+Split discovered candidates into at most three batches. Start `job-fit-scorer` agents (Agent tool, `subagent_type: "job-fit-scorer"`) in parallel by sending the calls in one message. They must only read candidate descriptions, the local profile, and `data/resume.txt`; they return corrected JSON with `minimum_years`, `active`, concise fit evidence, and a `skill_score` (0–25) with its `skill_rationale`. Keep both fields on every candidate when merging, since `score` uses `skill_score` as the skills component. They must not use Chrome or write external state.
 
 Merge their results and run:
 

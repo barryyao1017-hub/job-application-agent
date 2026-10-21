@@ -172,6 +172,27 @@ class AgentInstructionTests(unittest.TestCase):
         self.assertIn("name: job-fit-scorer\n", scorer)
         self.assertIn("tools: Read, Grep, Glob\n", scorer)
 
+    def test_fit_scorer_sets_the_skill_score(self) -> None:
+        scorer = FIT_SCORER.read_text(encoding="utf-8")
+        self.assertIn("model: opus\neffort: high\n", scorer)
+        self.assertIn("`data/resume.txt`", scorer)
+        self.assertIn("Add `skill_score`, an integer from 0 to 25, and `skill_rationale`", scorer)
+        for area in (
+            "training ML or AI models",
+            "data wrangling",
+            "building data pipelines or ETL",
+            "A/B testing and experimentation",
+            "deploying models to production",
+        ):
+            self.assertIn(area, scorer)
+        self.assertIn("Start at 10", scorer)
+        self.assertIn("A résumé gap never\ntakes a role below 10", scorer)
+        self.assertIn("keep résumé details and personal\nfacts out of it", scorer)
+
+        pipeline = PIPELINE_SKILL.read_text(encoding="utf-8")
+        self.assertIn("python3 -m job_agent resume-text", pipeline)
+        self.assertIn("Keep both fields on every candidate when merging", pipeline)
+
     def test_policy_registry_documents_exist(self) -> None:
         import json
 

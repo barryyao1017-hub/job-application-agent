@@ -6,7 +6,7 @@
   "run_timeout_minutes": 90,
   "claim_timeout_minutes": 120,
   "recency_hours": 24,
-  "minimum_fit_score": 70,
+  "minimum_fit_score": 80,
   "company_policies_path": ".claude/skills/company-application-policies/references/policies.json",
   "submit_applications": false,
   "max_parallel_workers": 2,
