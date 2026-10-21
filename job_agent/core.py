@@ -4,6 +4,8 @@ import json
 import re
 import sqlite3
 import uuid
+import zipfile
+from xml.etree import ElementTree
 from zoneinfo import ZoneInfo
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -15,6 +17,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.json"
 DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "job-agent.sqlite3"
+DEFAULT_RESUME_TEXT_PATH = PROJECT_ROOT / "data" / "resume.txt"
 DEFAULT_COMPANY_POLICIES_PATH = (
     PROJECT_ROOT
     / ".agents"
@@ -258,6 +261,44 @@ class ScoreResult:
     skip_reason: str | None = None
 
 
+def parse_skill_score(value: Any) -> int | None:
+    """Return job-fit-scorer's 0-25 skill score, clamped, or None when it is missing or not a number."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        score = round(float(value))
+    except (TypeError, ValueError):
+        return None
+    return max(0, min(25, score))
+
+
+def resume_text(path: Path | str) -> str:
+    """Plain text of the résumé, so read-only agents can read a .docx."""
+    resume = Path(path).expanduser()
+    suffix = resume.suffix.lower()
+    if suffix in (".txt", ".md"):
+        return resume.read_text(encoding="utf-8").strip()
+    if suffix != ".docx":
+        raise ValueError(f"Cannot extract text from {resume.name}; use a .docx, .txt or .md résumé")
+    word = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    with zipfile.ZipFile(resume) as archive:
+        root = ElementTree.fromstring(archive.read("word/document.xml"))
+    lines = []
+    for paragraph in root.iter(f"{word}p"):
+        parts = []
+        for node in paragraph.iter():
+            if node.tag == f"{word}t":
+                parts.append(node.text or "")
+            elif node.tag == f"{word}tab":
+                parts.append("\t")
+            elif node.tag in (f"{word}br", f"{word}cr"):
+                parts.append("\n")
+        line = "".join(parts).strip()
+        if line:
+            lines.append(line)
+    return "\n".join(lines)
+
+
 def location_term_pattern(term: str) -> re.Pattern[str]:
     """Match ``term`` as whole words, so ", ca" matches "San Mateo, CA" but not "Toronto, Canada"."""
     term = term.lower()
@@ -310,8 +351,16 @@ def score_candidate(candidate: dict[str, Any], config: dict[str, Any], now: date
         return ScoreResult(0, [], "location is outside California, Washington, or US remote")
 
     role_points = 30
-    skills = sorted({term for term in config["skill_keywords"] if term.lower() in combined})
-    skill_points = min(25, round(len(skills) / 8 * 25))
+    # job-fit-scorer reads the post against the résumé and sets skill_score;
+    # the keyword count is only a fallback for jobs ingested without one.
+    llm_skill_score = parse_skill_score(candidate.get("skill_score"))
+    if llm_skill_score is not None:
+        skill_points = llm_skill_score
+        skill_detail = f"job-fit-scorer: {str(candidate.get('skill_rationale') or '').strip() or 'no rationale'}"
+    else:
+        skills = sorted({term for term in config["skill_keywords"] if term.lower() in combined})
+        skill_points = min(25, round(len(skills) / 8 * 25))
+        skill_detail = f"keyword fallback: {', '.join(skills[:8]) or 'no explicit overlap'}"
     if minimum_years is None:
         experience_points = 15
     elif minimum_years <= 3:
@@ -323,7 +372,7 @@ def score_candidate(candidate: dict[str, Any], config: dict[str, Any], now: date
     total = role_points + skill_points + experience_points + location_points + recency_points
     rationale = [
         f"role {role_points}/30 ({', '.join(role_matches[:4])})",
-        f"skills {skill_points}/25 ({', '.join(skills[:8]) or 'no explicit overlap'})",
+        f"skills {skill_points}/25 ({skill_detail})",
         f"experience {experience_points}/20 ({minimum_years if minimum_years is not None else 'unspecified'} years minimum)",
         f"location {location_points}/15 ({location or 'unspecified'})",
         f"recency {recency_points}/10",
@@ -358,6 +407,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     description TEXT,
     minimum_years INTEGER,
     active INTEGER NOT NULL DEFAULT 1,
+    skill_score INTEGER,
+    skill_rationale TEXT,
     fit_score INTEGER,
     fit_rationale TEXT,
     status TEXT NOT NULL DEFAULT 'discovered',
@@ -432,14 +483,16 @@ def connect_db(path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     existing_columns = {
         row["name"] for row in connection.execute("PRAGMA table_info(jobs)").fetchall()
     }
-    for name in (
-        "company_policy_id",
-        "company_policy_document",
-        "submitted_at",
-        "confirmation_evidence",
+    for name, column_type in (
+        ("company_policy_id", "TEXT"),
+        ("company_policy_document", "TEXT"),
+        ("submitted_at", "TEXT"),
+        ("confirmation_evidence", "TEXT"),
+        ("skill_score", "INTEGER"),
+        ("skill_rationale", "TEXT"),
     ):
         if name not in existing_columns:
-            connection.execute(f"ALTER TABLE jobs ADD COLUMN {name} TEXT")
+            connection.execute(f"ALTER TABLE jobs ADD COLUMN {name} {column_type}")
     return connection
 
 
@@ -527,6 +580,8 @@ def ingest_candidates(
             str(candidate.get("description") or ""),
             candidate.get("minimum_years"),
             int(candidate.get("active", True) is not False),
+            parse_skill_score(candidate.get("skill_score")),
+            str(candidate.get("skill_rationale") or "").strip() or None,
             application_url,
             now,
         )
@@ -538,8 +593,9 @@ def ingest_candidates(
                 INSERT INTO jobs(
                     id, run_id, source, source_url, canonical_url, ats_job_id,
                     company, title, location, remote, posted_at, discovered_at,
-                    description, minimum_years, active, application_url, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    description, minimum_years, active, skill_score, skill_rationale,
+                    application_url, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 values,
             )

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 import unittest
+import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -22,6 +24,7 @@ from job_agent.core import (
     outcome_report,
     record_discovery,
     recover_stale_claims,
+    resume_text,
     score_candidate,
     score_jobs,
     submit_job,
@@ -204,6 +207,66 @@ class CoreTests(unittest.TestCase):
 
         general = candidate(title="Software Engineer", description="Build email delivery services.")
         self.assertIn("outside the ML", score_candidate(general, self.cfg, now=NOW).skip_reason or "")
+
+    def test_skill_points_come_from_the_fit_scorer(self) -> None:
+        keyword = score_candidate(candidate(), self.cfg, now=NOW)
+        self.assertIn("skills 16/25 (keyword fallback: machine learning, python, pytorch, ranking, sql)", keyword.rationale)
+
+        scored = score_candidate(
+            candidate(skill_score=12, skill_rationale="Trains ranking models; PyTorch."), self.cfg, now=NOW
+        )
+        self.assertIn("skills 12/25 (job-fit-scorer: Trains ranking models; PyTorch.)", scored.rationale)
+        self.assertEqual(scored.score, keyword.score - 16 + 12)
+
+        for raw, expected in ((40, 25), (-3, 0), ("18", 18), (0, 0)):
+            with self.subTest(raw=raw):
+                result = score_candidate(candidate(skill_score=raw), self.cfg, now=NOW)
+                self.assertTrue(result.rationale[1].startswith(f"skills {expected}/25 (job-fit-scorer"))
+        for raw in (None, "n/a", True):
+            with self.subTest(raw=raw):
+                result = score_candidate(candidate(skill_score=raw), self.cfg, now=NOW)
+                self.assertIn("keyword fallback", result.rationale[1])
+
+    def test_skill_score_is_stored_and_used_when_scoring(self) -> None:
+        low = candidate(skill_score=3, skill_rationale="Dashboards only.")
+        ingest_candidates(self.connection, [low], self.run_id)
+        row = self.connection.execute("SELECT skill_score, skill_rationale FROM jobs").fetchone()
+        self.assertEqual((row["skill_score"], row["skill_rationale"]), (3, "Dashboards only."))
+        # 30 role + 3 skills + 20 experience + 15 location + 10 recency = 78.
+        scored = score_jobs(self.connection, {**self.cfg, "minimum_fit_score": 80}, self.run_id, now=NOW)
+        self.assertEqual(scored["queued"], [])
+        fit = self.connection.execute("SELECT fit_score FROM jobs").fetchone()["fit_score"]
+        self.assertEqual(fit, 78)
+
+    def test_existing_ledger_gains_skill_columns(self) -> None:
+        path = self.root / "legacy.sqlite3"
+        connect_db(path).close()
+        legacy = sqlite3.connect(path)
+        legacy.execute("ALTER TABLE jobs DROP COLUMN skill_score")
+        legacy.execute("ALTER TABLE jobs DROP COLUMN skill_rationale")
+        legacy.commit()
+        legacy.close()
+        upgraded = connect_db(path)
+        columns = {row["name"]: row["type"] for row in upgraded.execute("PRAGMA table_info(jobs)")}
+        upgraded.close()
+        self.assertEqual(columns["skill_score"], "INTEGER")
+        self.assertEqual(columns["skill_rationale"], "TEXT")
+
+    def test_resume_text_reads_docx_paragraphs(self) -> None:
+        resume = self.root / "resume.docx"
+        word = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+        with zipfile.ZipFile(resume, "w") as archive:
+            archive.writestr(
+                "word/document.xml",
+                f"<w:document {word}><w:body>"
+                "<w:p><w:r><w:t>Jane Doe</w:t></w:r></w:p>"
+                "<w:p></w:p>"
+                "<w:p><w:r><w:t>Python</w:t><w:tab/><w:t>SQL</w:t></w:r></w:p>"
+                "</w:body></w:document>",
+            )
+        self.assertEqual(resume_text(resume), "Jane Doe\nPython\tSQL")
+        with self.assertRaises(ValueError):
+            resume_text(self.root / "resume.pdf")
 
     def test_state_abbreviation_location_terms(self) -> None:
         cfg = {**self.cfg, "preferred_location_terms": [", ca", ", wa"]}
