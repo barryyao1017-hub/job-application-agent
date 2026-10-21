@@ -54,6 +54,20 @@ class AgentInstructionTests(unittest.TestCase):
         self.assertIn("../../../application-profile.md", skill)
         self.assertTrue((COMPLETION_SKILL.parent / "../../../application-profile.md").resolve().is_file())
         self.assertIn("enqueue-attach.js", skill)
+        self.assertIn("Attach the approved résumé with `mcp__claude-in-chrome__file_upload`", skill)
+        self.assertIn("Local Resume Companion is the fallback", skill)
+        self.assertIn("Read `approved_resume_path` from `config.json`", skill)
+        self.assertIn("this worker's own `tabId`", skill)
+        self.assertIn("in one `browser_batch` where possible", skill)
+        self.assertIn('"Element is no longer in the document", re-run `find` and `file_upload` once', skill)
+        self.assertIn("never a Cover Letter input", skill)
+        self.assertIn("`input#_systemfield_resume`", skill)
+        self.assertIn("`apply-with-resume-container` dropzone", skill)
+        self.assertIn('`spl-dropzone[data-test="resume-upload"]`', skill)
+        self.assertIn("`iframe#grnhse_iframe`", skill)
+        self.assertIn("Fall back to Local Resume Companion only when", skill)
+        self.assertIn("Each enqueue adds its own entry to `attach-queue/`", skill)
+        self.assertIn("Report `resume_verified: true` only then", skill)
         self.assertIn(
             "ready_for_review` result requires `resume_verified: true",
             skill,
@@ -77,6 +91,36 @@ class AgentInstructionTests(unittest.TestCase):
         self.assertIn("resume_verified` may be `true` or `false", pipeline)
         self.assertIn("ready_for_review require true", worker)
         self.assertIn("disallowedTools: Agent", worker)
+        self.assertIn("Attach the résumé with `file_upload`", worker)
+        self.assertIn("pinning\nyour own tabId", worker)
+
+    def test_workers_run_in_parallel_without_sharing_state(self) -> None:
+        pipeline = PIPELINE_SKILL.read_text(encoding="utf-8")
+        skill = COMPLETION_SKILL.read_text(encoding="utf-8")
+        claude_md = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+
+        self.assertIn("### 4. Delegate applications to parallel workers", pipeline)
+        self.assertIn("`max_parallel_workers` from `config.json` (default 2, at most 3)", pipeline)
+        self.assertIn("--worker-id daily-browser-worker-N --run-id RUN_ID", pipeline)
+        self.assertIn("one Agent call each, so they run at the same time", pipeline)
+        self.assertIn("each worker opens and owns its own tab", pipeline)
+        self.assertIn("set `max_parallel_workers` to 1 for the next run", pipeline)
+        for removed in (
+            "Process workers sequentially",
+            "Run the worker in the foreground",
+            "Run those workers sequentially",
+            "single-slot queue",
+        ):
+            with self.subTest(removed=removed):
+                self.assertNotIn(removed, pipeline)
+                self.assertNotIn(removed, skill)
+        self.assertIn("open it in a new tab of your own with `tabs_create_mcp`", skill)
+        self.assertIn("set to a marker only your tab carries: `jobtab-`", skill)
+        self.assertIn("a page load or redirect resets the title", skill)
+        self.assertIn("never a shorter prefix another worker's page could also match", skill)
+        self.assertIn("now the **fallback** attach path", claude_md)
+        self.assertIn("`file_upload` first and Local Resume Companion as the fallback", claude_md)
+        self.assertNotIn("one at a time", claude_md)
 
     def test_submission_is_gated_and_confirmed(self) -> None:
         skill = COMPLETION_SKILL.read_text(encoding="utf-8")

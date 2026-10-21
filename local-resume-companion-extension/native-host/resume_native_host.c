@@ -1,15 +1,25 @@
+#include <dirent.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #ifndef CONFIG_PATH
 #define CONFIG_PATH "config.json"
 #endif
+#ifndef QUEUE_DIR
+#define QUEUE_DIR "attach-queue"
+#endif
+// The single-slot file older enqueue-attach.js versions write; still honored
+// so a checkout that predates the queue directory keeps working.
 #ifndef QUEUE_PATH
 #define QUEUE_PATH "attach-target-url.txt"
 #endif
+// Entries a worker left behind stop matching after this long.
+#define ENTRY_MAX_AGE_SECONDS (30 * 60)
 
 static const char base64_table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -56,20 +66,59 @@ static char *encode_base64(const unsigned char *data, size_t size) {
   return output;
 }
 
+// Claims one queued entry whose URL appears in the payload by renaming it to
+// a name unique to this process. rename() is atomic, so when several hosts
+// race for the same entry exactly one wins; the rest see ENOENT and move on.
+static int claim_entry(const char *entry, const char *payload, char *claimed, size_t claimed_size) {
+  struct stat info;
+  if (stat(entry, &info) != 0 || !S_ISREG(info.st_mode)) return 0;
+  if (time(NULL) - info.st_mtime > ENTRY_MAX_AGE_SECONDS) {
+    unlink(entry);
+    return 0;
+  }
+  char target[2048] = {0};
+  FILE *file = fopen(entry, "r");
+  if (!file) return 0;
+  if (!fgets(target, sizeof(target), file)) target[0] = '\0';
+  fclose(file);
+  target[strcspn(target, "\r\n")] = '\0';
+  if (!target[0] || !strstr(payload, target)) return 0;
+  snprintf(claimed, claimed_size, "%s.claimed-%ld", entry, (long)getpid());
+  return rename(entry, claimed) == 0;
+}
+
+static int claim_queued(const char *payload, char *entry, size_t entry_size, char *claimed, size_t claimed_size) {
+  DIR *queue = opendir(QUEUE_DIR);
+  if (queue) {
+    struct dirent *item;
+    while ((item = readdir(queue))) {
+      size_t name_length = strlen(item->d_name);
+      if (name_length < 5 || strcmp(item->d_name + name_length - 4, ".url") != 0) continue;
+      snprintf(entry, entry_size, "%s/%s", QUEUE_DIR, item->d_name);
+      if (claim_entry(entry, payload, claimed, claimed_size)) {
+        closedir(queue);
+        return 1;
+      }
+    }
+    closedir(queue);
+  }
+  snprintf(entry, entry_size, "%s", QUEUE_PATH);
+  return claim_entry(entry, payload, claimed, claimed_size);
+}
+
 int main(void) {
   uint32_t length = 0;
   if (fread(&length, sizeof(length), 1, stdin) != 1 || length > 1024 * 1024) return 1;
-  char payload[1048577];
+  static char payload[1048577];
   if (fread(payload, 1, length, stdin) != length) return 1;
   payload[length] = '\0';
   char resume[4096] = {0};
   config_resume_path(resume, sizeof(resume));
-  char target[2048] = {0};
-  FILE *queue = fopen(QUEUE_PATH, "r");
-  if (queue) { fgets(target, sizeof(target), queue); fclose(queue); target[strcspn(target, "\r\n")] = '\0'; }
-  int claim = strstr(payload, "claim-attachment") && target[0] && strstr(payload, target);
+  char entry[4096] = {0}, claimed[4200] = {0};
+  int claim = strstr(payload, "claim-attachment") && resume[0] && access(resume, R_OK) == 0 &&
+              claim_queued(payload, entry, sizeof(entry), claimed, sizeof(claimed));
   char *reply = NULL;
-  if (claim && resume[0] && access(resume, R_OK) == 0) {
+  if (claim) {
     FILE *file = fopen(resume, "rb");
     if (file && fseek(file, 0, SEEK_END) == 0) {
       long size = ftell(file);
@@ -87,7 +136,9 @@ int main(void) {
       free(bytes);
       fclose(file);
     }
-    if (reply) unlink(QUEUE_PATH);
+    // Consume the entry only once the reply exists; otherwise put it back.
+    if (reply) unlink(claimed);
+    else rename(claimed, entry);
   }
   if (!reply) reply = strdup("{\"error\":\"No matching approved resume attachment is queued\"}");
   uint32_t reply_length = (uint32_t)strlen(reply);

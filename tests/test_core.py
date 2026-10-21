@@ -229,6 +229,40 @@ class CoreTests(unittest.TestCase):
         recovered = recover_stale_claims(self.connection, 120, now=NOW)
         self.assertEqual(recovered, [claimed["id"]])
 
+    def test_parallel_claims_skip_a_company_already_claimed(self) -> None:
+        ingest_candidates(
+            self.connection,
+            [
+                candidate(),
+                candidate(
+                    application_url="https://job-boards.greenhouse.io/acme/jobs/222",
+                    source_url="https://acme.example/jobs/222",
+                    company="ACME ",
+                ),
+                candidate(
+                    application_url="https://jobs.ashbyhq.com/beta/333",
+                    source_url="https://beta.example/jobs/333",
+                    company="Beta",
+                ),
+            ],
+            self.run_id,
+        )
+        score_jobs(self.connection, self.cfg, self.run_id, now=NOW)
+        first = claim_next(self.connection, "worker-1")
+        second = claim_next(self.connection, "worker-2")
+        self.assertEqual({first["company"].strip().lower(), second["company"]}, {"acme", "Beta"})
+        self.assertIsNone(claim_next(self.connection, "worker-3"))
+        complete_job(
+            self.connection,
+            first["id"],
+            "worker-1",
+            review_url=first["application_url"],
+            resume_verified=True,
+        )
+        third = claim_next(self.connection, "worker-1")
+        self.assertEqual(third["company"].strip().lower(), "acme")
+        self.assertNotEqual(third["id"], first["id"])
+
     def test_completion_requires_resume_verification(self) -> None:
         ingest_candidates(self.connection, [candidate()], self.run_id)
         score_jobs(self.connection, self.cfg, self.run_id, now=NOW)
@@ -380,6 +414,18 @@ class CoreTests(unittest.TestCase):
         path = self.root / "config.json"
         path.write_text(json.dumps(legacy), encoding="utf-8")
         self.assertFalse(load_config(path)["submit_applications"])
+
+    def test_parallel_workers_default_and_bounds(self) -> None:
+        import json
+
+        path = self.root / "config.json"
+        path.write_text(json.dumps(self.cfg), encoding="utf-8")
+        self.assertEqual(load_config(path)["max_parallel_workers"], 2)
+        for value in (0, 4, True, "2"):
+            with self.subTest(value=value):
+                path.write_text(json.dumps({**self.cfg, "max_parallel_workers": value}), encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    load_config(path)
 
     def test_digest_is_idempotent(self) -> None:
         payload = digest_payload(self.connection, self.cfg, self.run_id, now=NOW)

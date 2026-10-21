@@ -53,11 +53,18 @@ class SyncMainCheckoutTests(unittest.TestCase):
         self.assertEqual(git(self.checkout, "rev-parse", "HEAD"), git(self.primary, "rev-parse", "origin/main"))
         self.assertFalse((self.checkout / "feature.txt").exists())
         self.assertEqual(git(self.primary, "branch", "--show-current"), "feature")
-        for path in ("config.json", "data", "artifacts", "local-resume-companion-extension/attach-target-url.txt"):
+        for path in (
+            "config.json",
+            "data",
+            "artifacts",
+            "local-resume-companion-extension/attach-target-url.txt",
+            "local-resume-companion-extension/attach-queue",
+        ):
             with self.subTest(path=path):
                 link = self.checkout / path
                 self.assertTrue(link.is_symlink())
                 self.assertEqual(os.readlink(link), str(self.primary / path))
+        self.assertTrue((self.primary / "local-resume-companion-extension" / "attach-queue").is_dir())
         # Writing the résumé queue through the link lands where the native host reads it.
         (self.checkout / "local-resume-companion-extension" / "attach-target-url.txt").write_text("https://x\n")
         self.assertEqual(

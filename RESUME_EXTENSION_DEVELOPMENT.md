@@ -2,6 +2,8 @@
 
 This guide is for maintaining and debugging the Local Resume Companion Chrome extension when a job application does not receive the approved résumé correctly.
 
+**The extension is now the fallback.** The default attach method is Claude in Chrome's `file_upload` (`find` → `file_upload` back to back, pinned to the worker's tab), described in section 5 of `.claude/skills/application-completion/SKILL.md`, with the per-ATS trial, workarounds, and timing in `RESUME_FILE_UPLOAD_TRIAL.md`. Use this guide when a worker had to fall back to the extension.
+
 ## Purpose and safety boundaries
 
 The extension attaches only the approved local résumé to a required Résumé/CV field on one explicitly queued application page.
@@ -19,7 +21,7 @@ The extension attaches only the approved local résumé to a required Résumé/C
 | `manifest.json` | Declares extension permissions and injects the content script into all page frames. |
 | `content.js` | Finds the required upload control, receives the approved file bytes, assigns the file, and dispatches normal upload events. |
 | `background.js` | Relays a page-frame request to the native messaging host. |
-| `enqueue-attach.js` | Queues one exact application URL for autonomous attachment. |
+| `enqueue-attach.js` | Adds one exact application URL to the `attach-queue/` directory for autonomous attachment. |
 | `native-host/resume_native_host.c` | Provides the approved local file only when the queued URL matches. |
 | `native-host/install.command` | Registers the native messaging host for the locally installed Chrome extension. |
 
@@ -30,27 +32,13 @@ The extension attaches only the approved local résumé to a required Résumé/C
 3. The content script on the matching page/frame locates the required résumé field.
 4. The content script asks `background.js` for the approved file.
 5. The background worker asks the native host to claim the queued URL.
-6. The native host returns the approved résumé bytes once, then consumes the queued instruction.
+6. The native host claims the matching queue entry, returns the approved résumé bytes once, then deletes that entry.
 7. The content script assigns the file to the input, dispatches `input` and `change`, and checks the filename.
 8. The application agent confirms that `Jiayi_Yao_resume.docx` is displayed in the form.
 
-## Parallel-worker feasibility
+## Parallel workers
 
-Codex can create multiple one-job workers, but the extension's current queue cannot safely serve concurrent workers:
-
-- `enqueue-attach.js` overwrites one shared `attach-target-url.txt`.
-- The native host reads one target and deletes the file after a successful claim.
-- Separate native-host processes have no lock or lease coordinating simultaneous claims.
-- Multiple workers also share the user's Chrome instance, so tab ownership and recovery can contend even when URLs differ.
-
-Use fresh workers sequentially today. Before enabling concurrent application workers:
-
-1. Replace the singleton file with an atomic queue keyed by normalized application URL and a unique request or worker ID.
-2. Claim and remove only the matching entry under a file lock or transactional store.
-3. Return the request ID with the attachment response so the content script can reject mismatched claims.
-4. Forward-test simultaneous uploads in distinct tabs, including embedded iframes.
-5. Verify each tab shows the approved filename and that Cover Letter remains untouched.
-6. Verify independent browser sessions can retain their final Review or blocked handoff tabs.
+The queue is safe for concurrent workers: one file per request in `attach-queue/`, claimed by atomic rename and matched to the requesting page's URL (see the extension README's "Concurrent workers"). Workers in the same Chrome still need their own tabs, which the completion skill requires. After changing `native-host/resume_native_host.c`, rebuild it with `native-host/install.command` (or rerun its `cc` line) and run `python3 -m unittest tests.test_resume_queue`.
 
 ## Field-identification rules
 

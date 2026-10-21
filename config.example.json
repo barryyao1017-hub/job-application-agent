@@ -1,5 +1,5 @@
 {
-  "approved_resume_path": "/path/to/your/resume.docx",
+  "approved_resume_path": "/Users/you/code/job-application-agent/data/Jiayi_Yao_resume.docx",
   "notification_email": "you@example.com",
   "timezone": "America/Los_Angeles",
   "daily_start_time": "07:00",
@@ -9,6 +9,7 @@
   "minimum_fit_score": 70,
   "company_policies_path": ".claude/skills/company-application-policies/references/policies.json",
   "submit_applications": false,
+  "max_parallel_workers": 2,
   "approved_resume_filename": "Jiayi_Yao_resume.docx",
   "role_keywords": [
     "machine learning engineer",

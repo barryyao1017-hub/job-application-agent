@@ -1,6 +1,7 @@
 local-profile.md
 config.json
 attach-target-url.txt
+attach-queue/
 native-host/resume-native-host
 local-resume-companion-extension/native-host/resume-native-host
 *.docx
