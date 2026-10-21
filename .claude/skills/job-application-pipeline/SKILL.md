@@ -146,7 +146,7 @@ Use the worker id of the slot that claimed the job. Reject malformed worker outp
 
 Application workers share one Chrome but nothing else they could clobber:
 
-- Each worker opens its own tab and pins that `tabId` in every browser call, and passes its tab's full URL as agent-vault's `tab_hint`, so logins and sign-ups fill only its own tab.
+- Each worker opens its own tab and pins that `tabId` in every browser call, and passes a marker it puts in its own tab's title as agent-vault's `tab_hint`, so logins and sign-ups fill only its own tab.
 - The résumé is attached with `file_upload`, which reads the file per call and targets one ref in one tab. The Local Resume Companion fallback keeps one queue entry per request under `attach-queue/` and hands each to the page whose URL matches it, so concurrent fallbacks do not overwrite each other.
 - `claim` is atomic and skips companies that already have a claimed job, so two workers never share one company's account.
 
