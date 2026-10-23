@@ -397,16 +397,17 @@ US_STATE_NAMES = (
     "wisconsin|wyoming|district of columbia"
 )
 US_STATE_CODES = (
-    "al|ak|az|ar|ca|co|ct|de|dc|fl|ga|hi|id|il|in|ia|ks|ky|la|me|md|ma|mi|mn|ms|mo|mt|ne|nv|nh|nj|nm|"
-    "ny|nc|nd|oh|ok|or|pa|ri|sc|sd|tn|tx|ut|vt|va|wa|wv|wi|wy"
+    "AL|AK|AZ|AR|CA|CO|CT|DE|DC|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|"
+    "NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY"
 )
 US_LOCATION_PATTERN = re.compile(
     rf"\b(?:us|u\.s\.?|usa|u\.s\.a\.|united states|north america|americas|{US_STATE_NAMES}|"
     r"nyc|boston|chicago|austin|dallas|houston|denver|boulder|atlanta|miami|pittsburgh|philadelphia|"
     r"phoenix|salt lake city|portland|minneapolis|detroit|raleigh|durham|nashville|baltimore|"
     r"san francisco|bay area|silicon valley|los angeles|seattle)\b"
-    rf"|,\s*(?:{US_STATE_CODES})\b"
 )
+# Upper case only, matched against the original text: ", or" and ", in" are words, ", OR" and ", IN" are states.
+US_STATE_CODE_PATTERN = re.compile(rf",\s*(?:{US_STATE_CODES})\b")
 # Words that say how the work is done rather than where; a location made only of
 # these (plus punctuation) is a bare "Remote".
 WORK_MODE_PATTERN = re.compile(
@@ -419,25 +420,25 @@ REMOTE_TERMS = ("remote", "virtual")
 def location_matches(location: str, remote: bool, config: dict[str, Any]) -> bool:
     """True when at least one listed location is a preferred one or a US remote option.
 
-    Boards list several locations separated by " | ". A part naming a non-US place
+    Boards list several locations separated by " | " (some use "; "). A part naming a non-US place
     never counts. A remote part (the posting's remote flag, or "remote" in the
     text) counts only when it also names the US (a state, a state code after a
     comma, a major US city, "US"), names a preferred place, or is a bare
     "Remote": Ashby flags Europe-only roles as remote, so ``"Prague"`` with a
     remote flag is rejected while ``"Austin, TX"`` with one is accepted.
     """
-    lower = location.lower()
-    if not lower.strip():
+    if not location.strip():
         return True
     places = [
         location_term_pattern(str(term))
         for term in config.get("preferred_location_terms", ())
         if str(term).strip().lower() not in REMOTE_TERMS
     ]
-    for part in (piece.strip() for piece in lower.split("|")):
-        if not part:
+    for original in (piece.strip() for piece in re.split(r"[|;]", location)):
+        if not original:
             continue
-        us = bool(US_LOCATION_PATTERN.search(part))
+        part = original.lower()
+        us = bool(US_LOCATION_PATTERN.search(part) or US_STATE_CODE_PATTERN.search(original))
         if NON_US_LOCATION_PATTERN.search(part) and not us:
             continue
         if any(pattern.search(part) for pattern in places):
