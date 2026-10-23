@@ -10,11 +10,15 @@ from .core import (
     DEFAULT_CONFIG_PATH,
     DEFAULT_DB_PATH,
     DEFAULT_RESUME_TEXT_PATH,
+    APPLICATION_LIMIT_CATEGORY,
+    active_limits,
     block_job,
     claim_next,
+    clear_limits,
     complete_job,
     connect_db,
     create_run,
+    deferred_jobs,
     digest_payload,
     finish_run,
     ingest_candidates,
@@ -25,6 +29,7 @@ from .core import (
     outcome_report,
     record_discovery,
     recover_stale_claims,
+    requeue_jobs,
     resume_text,
     score_jobs,
     submit_job,
@@ -112,6 +117,25 @@ def build_parser() -> argparse.ArgumentParser:
     block.add_argument("--category", required=True)
     block.add_argument("--message", required=True)
     block.add_argument("--review-url")
+    block.add_argument(
+        "--until",
+        help=f"With --category {APPLICATION_LIMIT_CATEGORY}: ISO date the cap lifts "
+        "(default: until clear-limit)",
+    )
+
+    requeue = subparsers.add_parser(
+        "requeue", help="Put blocked or ready_for_review jobs back in the queue for a fresh attempt"
+    )
+    requeue.add_argument("--job-id", required=True, nargs="+")
+
+    subparsers.add_parser(
+        "limits", help="Companies whose application cap is in force and the queued jobs it defers"
+    )
+
+    clear_limit = subparsers.add_parser(
+        "clear-limit", help="Lift a reported application cap, e.g. after withdrawing applications"
+    )
+    clear_limit.add_argument("--company", required=True)
 
     digest = subparsers.add_parser("digest")
     digest.add_argument("--run-id", required=True)
@@ -182,7 +206,11 @@ def main(argv: list[str] | None = None) -> int:
             emit({"matches": matches})
         elif args.command == "claim":
             claimed = claim_next(
-                connection, args.worker_id, config["company_policies_path"], run_id=args.run_id
+                connection,
+                args.worker_id,
+                config["company_policies_path"],
+                run_id=args.run_id,
+                limited_minimum_fit_score=int(config["limited_company_minimum_fit_score"]),
             )
             if claimed is not None:
                 claimed["submit"] = config["submit_applications"]
@@ -210,7 +238,8 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
         elif args.command == "report":
-            emit(outcome_report(connection, run_id=args.run_id, since=args.since))
+            policies = load_company_policies(config["company_policies_path"])
+            emit(outcome_report(connection, run_id=args.run_id, since=args.since, policies=policies))
         elif args.command == "block":
             emit(
                 block_job(
@@ -220,8 +249,23 @@ def main(argv: list[str] | None = None) -> int:
                     args.category,
                     args.message,
                     args.review_url,
+                    policies=load_company_policies(config["company_policies_path"]),
+                    until=args.until,
                 )
             )
+        elif args.command == "requeue":
+            emit({"requeued": requeue_jobs(connection, args.job_id)})
+        elif args.command == "limits":
+            policies = load_company_policies(config["company_policies_path"])
+            emit(
+                {
+                    "active": list(active_limits(connection, policies).values()),
+                    "deferred": deferred_jobs(connection, policies),
+                }
+            )
+        elif args.command == "clear-limit":
+            policies = load_company_policies(config["company_policies_path"])
+            emit({"company": args.company, "cleared": clear_limits(connection, args.company, policies)})
         elif args.command == "digest":
             if args.sent_key or args.failed_key:
                 key = args.sent_key or args.failed_key

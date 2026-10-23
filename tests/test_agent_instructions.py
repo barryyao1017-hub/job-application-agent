@@ -193,6 +193,54 @@ class AgentInstructionTests(unittest.TestCase):
         self.assertIn("python3 -m job_agent resume-text", pipeline)
         self.assertIn("Keep both fields on every candidate when merging", pipeline)
 
+    def test_worker_guards_from_run_retros(self) -> None:
+        skill = COMPLETION_SKILL.read_text(encoding="utf-8")
+
+        # JOB-26: an employer identity account reached from the careers site counts.
+        self.assertIn("an IBMid (`login.ibm.com`), an Oracle account, an SAP ID", skill)
+        self.assertIn("do not decline it for being a general company account", skill)
+        self.assertIn("never grant a consent screen", skill)
+        self.assertIn("name `idmsa.apple.com` instead of calling `register`", skill)
+        # JOB-27: too many tabs make agent-vault time out.
+        self.assertIn("Chrome has too many tabs open", skill)
+        self.assertIn("retry the same call once", skill)
+        # JOB-32: committed values are read from the DOM.
+        self.assertIn("Confirm the committed value from the DOM, never from a screenshot alone", skill)
+        # JOB-37: required fields are found before the single Submit click.
+        self.assertIn("scan the current step for required fields programmatically", skill)
+        self.assertIn('`aria-required="true"`', skill)
+        self.assertIn("run the required-field scan from section 6 one last time", skill)
+        # JOB-38: a changed tab group stops the worker.
+        self.assertIn("call `tabs_context_mcp` and note its tab group", skill)
+        self.assertIn("do not refill the form in another tab", skill)
+        self.assertIn('"tab group changed"', skill)
+
+    def test_application_limits_are_deferred_not_blocked(self) -> None:
+        skill = COMPLETION_SKILL.read_text(encoding="utf-8")
+        pipeline = PIPELINE_SKILL.read_text(encoding="utf-8")
+        policies = (POLICIES_SKILL / "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn('`blocker_category: "application_limit"`', skill)
+        self.assertIn("When the category is `application_limit`", pipeline)
+        self.assertIn("Do not block or claim the company's other jobs by hand", pipeline)
+        self.assertIn("python3 -m job_agent limits", pipeline)
+        self.assertIn("python3 -m job_agent clear-limit --company COMPANY", pipeline)
+        self.assertIn("`limited_company_minimum_fit_score` (default 90)", pipeline)
+        self.assertIn("`application_limit` means the company's site caps", policies)
+        self.assertIn("curl -s localhost:9222/json/close/TAB_ID", pipeline)
+        script = (ROOT / "scripts" / "run-automation.sh").read_text(encoding="utf-8")
+        self.assertIn("Bash(curl -s localhost\\:9222/json/close:*)", script)
+
+    def test_ats_playbooks_exist_and_defer_to_the_skill(self) -> None:
+        skill = COMPLETION_SKILL.read_text(encoding="utf-8")
+        references = COMPLETION_SKILL.parent / "references"
+        for name in ("workday", "greenhouse", "ashby", "lever", "icims", "smartrecruiters", "successfactors", "amazon"):
+            with self.subTest(playbook=name):
+                self.assertIn(f"`{name}.md`", skill)
+                text = (references / f"{name}.md").read_text(encoding="utf-8")
+                self.assertIn("SKILL.md` is authoritative", text)
+        self.assertIn("where one disagrees with this skill, this skill wins", skill)
+
     def test_policy_registry_documents_exist(self) -> None:
         import json
 

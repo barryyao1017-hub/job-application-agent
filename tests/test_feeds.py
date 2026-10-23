@@ -497,6 +497,16 @@ class LocationFilterTests(unittest.TestCase):
         self.assertFalse(self.check("Toronto, Canada - Remote"))
         self.assertFalse(self.check("Austin, TX"))
 
+    def test_remote_flag_needs_a_us_place_or_a_bare_remote(self) -> None:
+        # 2026-10-21: ElevenLabs (Ashby) roles listed only in Europe carried isRemote.
+        self.assertFalse(self.check("Budapest, Hungary | Sofia, Bulgaria | Lisbon, Portugal", remote=True))
+        self.assertFalse(self.check("Prague", remote=True))
+        self.assertFalse(self.check("Remote - Ontario"))
+        self.assertFalse(self.check("Remote, Kraków"))
+        self.assertTrue(self.check("New York, NY", remote=True))
+        self.assertTrue(self.check("Remote-First", remote=True))
+        self.assertTrue(self.check("Remote (United States)"))
+
     def test_one_us_option_among_foreign_ones_is_enough(self) -> None:
         self.assertTrue(self.check("UK, Remote | US, CA, Remote"))
         self.assertTrue(self.check("Bangalore, India | San Francisco, CA"))
