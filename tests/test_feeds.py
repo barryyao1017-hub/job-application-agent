@@ -506,6 +506,12 @@ class LocationFilterTests(unittest.TestCase):
         self.assertTrue(self.check("New York, NY", remote=True))
         self.assertTrue(self.check("Remote-First", remote=True))
         self.assertTrue(self.check("Remote (United States)"))
+        # Lower-case "or"/"in" are words, not Oregon/Indiana.
+        self.assertFalse(self.check("Canada - Remote (ON, AB, BC, or NS Only)"))
+
+    def test_semicolon_separated_locations_are_checked_one_by_one(self) -> None:
+        self.assertTrue(self.check("Menlo Park, CA; New York, NY; Toronto, ON"))
+        self.assertFalse(self.check("Toronto, ON; London, UK", remote=True))
 
     def test_one_us_option_among_foreign_ones_is_enough(self) -> None:
         self.assertTrue(self.check("UK, Remote | US, CA, Remote"))
