@@ -22,6 +22,10 @@ Before interacting with the browser, fully read [`../../../application-profile.m
 
 Use the user's Chrome session through the Claude in Chrome tools (`mcp__claude-in-chrome__*`; load them with ToolSearch if they are deferred) and the current application tab or supplied application URL. Other application workers may be running in the same Chrome at the same time. Given a URL, open it in a new tab of your own with `tabs_create_mcp` and note that tab's `tabId`; given an opened tab, that tab is yours. Pass your own `tabId` in every browser call, and never read, navigate, or close a tab you did not open. Run shell commands from the repository root. Preserve a supplied `job_id` exactly; use `null` when an isolated run has no job ID.
 
+Right after opening your tab, call `tabs_context_mcp` and note its tab group along with your `tabId`. Call it again before each step's actions (filling a page, uploading, clicking **Next**) and immediately before the final Submit. If your `tabId` is gone or now sits in a different tab group, stop: do not refill the form in another tab and do not click anything, since with several workers in one Chrome a click could land in another worker's application. Return `blocked` with `blocker_category: "technical_failure"` and `blocker_message` "tab group changed", naming the old and new group in `blocker_evidence`.
+
+Once you know which applicant tracking system the application runs on, read its playbook in [`references/`](references/) if one exists (`workday.md`, `greenhouse.md`, `ashby.md`, `lever.md`, `icims.md`, `smartrecruiters.md`, `successfactors.md`, `amazon.md`). Playbooks record what earlier runs observed on that ATS; where one disagrees with this skill, this skill wins.
+
 ## 2. Pass authentication gates
 
 Use this procedure only when authentication is required to reach the application. Authentication never authorizes submission.
@@ -33,9 +37,11 @@ Use this procedure only when authentication is required to reach the application
       - `ok`: continue the application.
       - `origin_mismatch` while on the company's real login page on another domain: call `add_site_domain(account_id)` once, then retry `login` once if it returns `ok`.
       - `no_login_form`: navigate to the site's sign-in form and retry once.
-      - `needs_approval`, `denied`, `2fa_unsupported`, or `error`: stop and block with `blocker_category: "login_credentials_unavailable"`, putting the status and message in `blocker_message`. For `error`, also run `uv --directory /Users/jiayiyao/Desktop/agent-vault run agent-vault doctor` and include its summary; its "BW_SESSION not set in this shell" line is about the worker's shell, not the MCP server, so don't report it as a locked vault.
+      - `needs_approval`, `denied`, `2fa_unsupported`, or `error`: stop and block with `blocker_category: "login_credentials_unavailable"`, putting the status and message in `blocker_message`. For `error`, also run `uv --directory /Users/jiayiyao/Desktop/agent-vault run agent-vault doctor` and include its summary; its "BW_SESSION not set in this shell" line is about the worker's shell, not the MCP server, so don't report it as a locked vault. Exception: when the `error` says agent-vault could not connect to Chrome or the connection timed out, Chrome has too many tabs open. Close the intermediate, duplicate, and verification tabs you opened yourself (never your application tab or another worker's), count the remaining tabs with `curl -s localhost:9222/json/list`, and retry the same call once. If it fails again, block with `technical_failure` and put the tab count in `blocker_evidence`.
 3. Otherwise, use Chrome's saved-login autofill for the authentication origin. Use at most one matching saved login without revealing its secret, and attempt it once.
 4. Otherwise, if the site offers account creation (**Create Account**, **Sign Up**, **Register**), create the account with agent-vault. It fills the configured email and a generated password, saves the login to Bitwarden before submitting, and opens verification links itself.
+
+   An account that the careers site's own sign-in or **Create Account** link leads to counts as the site's account, even when it lives on the employer's identity domain and is valid across the employer's other services: an IBMid (`login.ibm.com`), an Oracle account, an SAP ID, and the like. Create it with `register` exactly as below; do not decline it for being a general company account. This does not extend to third-party sign-in (**Continue with Google**, LinkedIn, or any OAuth consent screen): never grant a consent screen, and use such a button only for an already signed-in session as in step 1. An Apple Account (`idmsa.apple.com`) is the exception: signing up needs an image CAPTCHA, so block with `login_credentials_unavailable` and name `idmsa.apple.com` instead of calling `register`.
    1. Open the site's create-account page in the application tab.
    2. Fill every field that is neither the email nor a password from the profile, such as first and last name, country, phone, and the terms or privacy consent box. Leave the email and password fields empty for agent-vault.
    3. Call `register()` once and act on its status:
@@ -75,6 +81,9 @@ For embedded forms, operate on the dropdown and its options within the same ifra
 2. Inspect the visible options before selecting.
 3. Select an exact visible option. Do not rely on typing and pressing Enter unless the site visibly confirms the intended value.
 4. Close the menu and verify that the control displays the committed value.
+5. Confirm the committed value from the DOM, never from a screenshot alone: read the control with `read_page`, `find`, or `javascript_tool` (the input's `value`, the selected option, `aria-checked`, or the control's displayed text). Screenshots can lag the page by several seconds, especially while other workers share the browser, and a lagging screenshot has shown the wrong option as selected. If the DOM disagrees with what you intended, fix it before moving on.
+
+Step 5 applies to every dropdown, radio group, checkbox, and yes/no question, including demographic, attestation, and work-authorization answers.
 
 If Data Science is absent from an education-discipline dropdown, select the closest truthful listed discipline, preferring Mathematics, Computer Science, Statistics/Decision Theory, or another related discipline before **Other**.
 
@@ -125,6 +134,8 @@ Report `ready_for_review` only when all of the following are true:
 - The approved résumé is visibly attached with the verified filename.
 - No visible validation errors or blank required fields remain.
 
+Before relying on that last check, scan the current step for required fields programmatically, not only by eye. With `javascript_tool` on your `tabId` (inside the form's frame), list the inputs, selects, and textareas that are `required`, `aria-required="true"`, or whose label carries a required marker (a trailing `*`, "(required)", Ashby's and Greenhouse's asterisks, Workday's `*` and `data-automation-id` required labels), and report which are empty or unchecked. Fill each empty one from the profile or résumé, or with its inference defaults; a required free-text field the profile does not cover (for example a GitHub or portfolio URL) gets the profile's value if it has one, otherwise a truthful "N/A". Repeat the scan until it reports nothing empty.
+
 Review the completed form once more. Do not use the final Submit control to trigger or refresh validation.
 
 ## 7. Submit and confirm (only with `submit: true`)
@@ -135,7 +146,9 @@ Skip this section unless the assignment says `submit: true`. Before clicking Sub
 - The form asks for a government identifier number, payment, a background-check authorization beyond a standard acknowledgement, or identity verification such as an ID photo or selfie.
 - The site warns that you have already applied to this role.
 
-Otherwise:
+If the site refuses because the account reached an application cap (for example amazon.jobs's "You've reached the maximum number of job applications" or an Ashby board's "applied ... within the last 90 days" or "limiting applications"), whether before the form or after Submit, return `blocked` with `blocker_category: "application_limit"`, the site's wording in `blocker_message`, and, when the page says when the limit ends, that date in `blocker_evidence`. Do not try another role at the same company.
+
+Otherwise, run the required-field scan from section 6 one last time, then:
 
 1. Click the immediate final Submit control exactly once.
 2. Wait for the page to settle, then read it. A confirmation is visible on-page text or a status such as "Thank you for applying", "Application submitted", "We received your application", or the role listed as Submitted/Under review in the candidate portal. Record a short quote of it as `confirmation_evidence`.
@@ -154,6 +167,8 @@ The only allowed hard blockers are:
 - A technical failure that remains after the supported recovery steps.
 - Identity verification (ID photo, selfie) the user must complete in person: `identity_verification_required`.
 - A submission that was rejected or cannot be confirmed (section 7): `submission_rejected` or `submission_unconfirmed`.
+- The account reached the site's application cap (section 7): `application_limit`.
+- The tab group changed under you (section 1): `technical_failure`.
 
 For a submitted or ready application, or a blocker:
 

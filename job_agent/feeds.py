@@ -38,7 +38,7 @@ from .core import (
     ML_SIGNAL_PATTERN,
     PROJECT_ROOT,
     iso_utc,
-    location_term_pattern,
+    location_matches,
     parse_datetime,
     utc_now,
 )
@@ -219,40 +219,6 @@ def title_matches(title: str, config: dict[str, Any]) -> bool:
     if ML_SIGNAL_PATTERN.search(lower):
         return True
     return any(str(term).lower() in lower for term in config.get("role_keywords", ()))
-
-
-NON_US_LOCATION_PATTERN = re.compile(
-    r"\b(?:uk|u\.k\.|united kingdom|england|london|ireland|dublin|france|paris|germany|berlin|munich|"
-    r"switzerland|zurich|netherlands|amsterdam|spain|madrid|barcelona|italy|milan|sweden|stockholm|"
-    r"poland|warsaw|israel|tel aviv|india|bangalore|bengaluru|hyderabad|china|shanghai|beijing|shenzhen|"
-    r"taiwan|taipei|japan|tokyo|korea|seoul|singapore|australia|sydney|melbourne|canada|toronto|"
-    r"vancouver|montreal|brazil|s[aã]o paulo|mexico|emea|apac|latam|europe)\b"
-)
-US_LOCATION_PATTERN = re.compile(r"\b(?:us|u\.s\.|usa|united states|north america)\b")
-
-
-def location_matches(location: str, remote: bool, config: dict[str, Any]) -> bool:
-    """True when at least one listed location is a preferred one or a US remote option.
-
-    Boards list several locations separated by " | ". A remote option only counts
-    when its part does not name a non-US country or city (``"UK, Remote"`` and
-    ``"Paris, France"`` with a remote flag are rejected; ``"US, TX, Remote"`` and a
-    bare ``"Remote"`` are accepted).
-    """
-    lower = location.lower()
-    if not lower.strip():
-        return True
-    preferred = [location_term_pattern(str(term)) for term in config.get("preferred_location_terms", ())]
-    for part in (piece.strip() for piece in lower.split("|")):
-        if not part:
-            continue
-        if NON_US_LOCATION_PATTERN.search(part) and not US_LOCATION_PATTERN.search(part):
-            continue
-        if remote or "remote" in part or "virtual" in part:
-            return True
-        if any(pattern.search(part) for pattern in preferred):
-            return True
-    return False
 
 
 def is_recent(posted_at: datetime | None, now: datetime, config: dict[str, Any]) -> bool:

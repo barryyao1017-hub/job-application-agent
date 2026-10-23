@@ -8,14 +8,18 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from job_agent.core import (
+    active_limits,
     block_job,
     canonicalize_url,
     claim_next,
+    clear_limits,
     complete_job,
     connect_db,
     create_run,
+    deferred_jobs,
     digest_payload,
     extract_ats_job_id,
+    infer_ats,
     ingest_candidates,
     load_company_policies,
     load_config,
@@ -24,6 +28,7 @@ from job_agent.core import (
     outcome_report,
     record_discovery,
     recover_stale_claims,
+    requeue_jobs,
     resume_text,
     score_candidate,
     score_jobs,
@@ -513,6 +518,201 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(payload["counts"]["manual_review"], 1)
         self.assertIn("Manual attention: 1", payload["email"]["body"])
         self.assertIn("policy: google", payload["email"]["body"])
+
+
+    def test_europe_only_remote_postings_are_outside_the_location_filter(self) -> None:
+        for location in ("Budapest, Hungary", "Sofia, Bulgaria", "Prague", "Remote - Ontario"):
+            with self.subTest(location=location):
+                result = score_candidate(candidate(location=location, remote=True), self.cfg, now=NOW)
+                self.assertIn("location", result.skip_reason or "")
+        for location in ("New York, NY", "Remote", "Remote - US", "Austin, Texas"):
+            with self.subTest(location=location):
+                result = score_candidate(candidate(location=location, remote=True), self.cfg, now=NOW)
+                self.assertIsNone(result.skip_reason)
+                self.assertIn("location 15/15", result.rationale[3])
+
+    def test_ats_is_stored_and_backfilled(self) -> None:
+        self.assertEqual(infer_ats("https://nvidia.wd5.myworkdayjobs.com/en-US/X/job/1"), "workday")
+        self.assertEqual(infer_ats("https://careers.withwaymo.com/jobs?gh_jid=1"), "greenhouse")
+        self.assertEqual(infer_ats("https://www.shopify.com/careers/ml_1", "ashby"), "ashby")
+        self.assertEqual(infer_ats("https://www.example.com/careers/1"), "example.com")
+        ingest_candidates(self.connection, [candidate()], self.run_id)
+        self.assertEqual(self.connection.execute("SELECT ats FROM jobs").fetchone()["ats"], "greenhouse")
+
+        path = self.root / "legacy-ats.sqlite3"
+        legacy = connect_db(path)
+        ingest_candidates(legacy, [candidate()], create_run(legacy, "r"))
+        legacy.close()
+        raw = sqlite3.connect(path)
+        raw.execute("ALTER TABLE jobs DROP COLUMN ats")
+        raw.commit()
+        raw.close()
+        upgraded = connect_db(path)
+        self.assertEqual(upgraded.execute("SELECT ats FROM jobs").fetchone()["ats"], "greenhouse")
+        upgraded.close()
+
+    def test_report_breaks_attempts_down_by_ats(self) -> None:
+        ingest_candidates(
+            self.connection,
+            [
+                candidate(),
+                candidate(
+                    company="Beta",
+                    application_url="https://beta.wd1.myworkdayjobs.com/External/job/X/ML-Engineer_R1",
+                ),
+            ],
+            self.run_id,
+        )
+        score_jobs(self.connection, self.cfg, self.run_id, now=NOW)
+        first = claim_next(self.connection, "w")
+        submit_job(
+            self.connection, first["id"], "w", confirmation_url=first["application_url"],
+            evidence="Thanks", resume_verified=True, submit_applications=True,
+        )
+        second = claim_next(self.connection, "w")
+        block_job(self.connection, second["id"], "w", "login_credentials_unavailable", "error")
+        report = outcome_report(self.connection, run_id=self.run_id)
+        by_ats = report["by_ats"]
+        self.assertEqual(set(by_ats), {"greenhouse", "workday"})
+        blocked_ats = "workday" if second["company"] == "Beta" else "greenhouse"
+        self.assertEqual(by_ats[blocked_ats]["blockers"], {"login_credentials_unavailable": 1})
+        self.assertEqual(by_ats[blocked_ats]["submission_rate_percent"], 0.0)
+        self.assertEqual(report["by_company"][first["company"]]["outcomes"]["submitted"], 1)
+        body = digest_payload(self.connection, self.cfg, self.run_id, now=NOW)["email"]["body"]
+        self.assertIn("By ATS: greenhouse", body)
+
+    def test_requeue_returns_blocked_jobs_to_the_queue(self) -> None:
+        ingest_candidates(self.connection, [candidate()], self.run_id)
+        score_jobs(self.connection, self.cfg, self.run_id, now=NOW)
+        job = claim_next(self.connection, "w")
+        block_job(self.connection, job["id"], "w", "technical_failure", "Upload failed")
+        self.assertEqual(requeue_jobs(self.connection, [job["id"]]), [job["id"]])
+        row = self.connection.execute("SELECT status, blocker_category FROM jobs").fetchone()
+        self.assertEqual((row["status"], row["blocker_category"]), ("queued", None))
+        with self.assertRaises(ValueError):
+            requeue_jobs(self.connection, [job["id"]])
+
+
+class ApplicationLimitTests(unittest.TestCase):
+    """Companies whose site caps applications: higher fit bar, and claims stop while the cap is in force."""
+
+    tearDown = CoreTests.tearDown
+
+    def setUp(self) -> None:
+        CoreTests.setUp(self)
+        (self.policy_root / "amazon.md").write_text("# Amazon\n", encoding="utf-8")
+        (self.policy_root / "elevenlabs.md").write_text("# ElevenLabs\n", encoding="utf-8")
+        (self.policy_root / "policies.json").write_text(
+            """{
+  "policies": [
+    {"id": "amazon", "company_names": ["Amazon", "AWS"], "handling": "auto_apply",
+     "documentation": "amazon.md", "reason": "Ten active applications.",
+     "application_limit": {"description": "Ten active applications per account."}},
+    {"id": "elevenlabs", "company_names": ["ElevenLabs"], "handling": "auto_apply",
+     "documentation": "elevenlabs.md", "reason": "One per 90 days.",
+     "application_limit": {"description": "One application per 90 days.", "max_submissions": 1, "window_days": 90}}
+  ]
+}""",
+            encoding="utf-8",
+        )
+        self.policies = load_company_policies(self.cfg["company_policies_path"])
+
+    def claim(self, worker: str, now: datetime | None = None) -> dict | None:
+        return claim_next(self.connection, worker, self.cfg["company_policies_path"], now=now)
+
+    def job(self, company: str, number: int, skill: int) -> dict:
+        # 30 role + skill + 20 experience + 15 location + 10 recency = 75 + skill.
+        return candidate(
+            company=company,
+            application_url=f"https://job-boards.greenhouse.io/{company.lower()}/jobs/{number}",
+            skill_score=skill,
+        )
+
+    def statuses(self) -> dict:
+        return {
+            (row["company"], row["fit_score"]): row["status"]
+            for row in self.connection.execute("SELECT company, fit_score, status FROM jobs")
+        }
+
+    def test_limited_companies_need_a_fit_of_90(self) -> None:
+        ingest_candidates(
+            self.connection,
+            [self.job("Amazon", 1, 10), self.job("AWS", 2, 17), self.job("Acme", 3, 10)],
+            self.run_id,
+        )
+        result = score_jobs(self.connection, self.cfg, self.run_id, now=NOW)
+        self.assertEqual(len(result["held_below_limited_threshold"]), 1)
+        self.assertEqual(
+            self.statuses(),
+            {("Amazon", 85): "scored", ("AWS", 92): "queued", ("Acme", 85): "queued"},
+        )
+
+    def test_invalid_application_limit_is_rejected(self) -> None:
+        (self.policy_root / "policies.json").write_text(
+            '{"policies": [{"id": "x", "company_names": ["X"], "handling": "auto_apply", '
+            '"documentation": "amazon.md", "application_limit": {"description": "d", "max_submissions": 1}}]}',
+            encoding="utf-8",
+        )
+        with self.assertRaises(ValueError):
+            load_company_policies(self.cfg["company_policies_path"])
+
+    def test_reported_limit_defers_the_company_until_cleared(self) -> None:
+        ingest_candidates(
+            self.connection,
+            [self.job("Amazon", 1, 20), self.job("Amazon", 2, 18), self.job("Acme", 3, 5)],
+            self.run_id,
+        )
+        score_jobs(self.connection, self.cfg, self.run_id, now=NOW)
+        first = self.claim("w")
+        self.assertEqual(first["company"], "Amazon")
+        capped = block_job(
+            self.connection, first["id"], "w", "application_limit", "Limit of 10 reached",
+            policies=self.policies,
+        )
+        self.assertEqual(capped["status"], "queued")
+        self.assertIn("policy:amazon", active_limits(self.connection, self.policies))
+        self.assertEqual({job["company"] for job in deferred_jobs(self.connection, self.policies)}, {"Amazon"})
+        # Amazon is skipped while capped; Acme is claimed instead, then nothing is left.
+        self.assertEqual(self.claim("w2")["company"], "Acme")
+        self.assertIsNone(self.claim("w3"))
+        body = digest_payload(self.connection, self.cfg, self.run_id, now=NOW)["email"]["body"]
+        self.assertIn("Deferred by an application limit (still queued): Amazon (2)", body)
+        report = outcome_report(self.connection, run_id=self.run_id, policies=self.policies)
+        self.assertEqual(report["attempt_outcomes"]["blocked"], 1)
+        self.assertEqual(len(report["deferred"]), 2)
+
+        self.assertEqual(clear_limits(self.connection, "AWS", self.policies), 1)
+        retry = self.claim("w4")
+        self.assertEqual((retry["company"], retry["blocker_category"]), ("Amazon", None))
+
+    def test_reported_limit_raises_the_bar_for_a_company_without_a_policy(self) -> None:
+        ingest_candidates(self.connection, [self.job("Beta", 1, 20), self.job("Beta", 2, 8)], self.run_id)
+        score_jobs(self.connection, self.cfg, self.run_id, now=NOW)
+        first = self.claim("w")
+        block_job(
+            self.connection, first["id"], "w", "application_limit", "Cap", policies=self.policies,
+            until=(NOW + timedelta(days=1)).isoformat(),
+        )
+        self.assertIsNone(self.claim("w", now=NOW))
+        # The 83-fit Beta job drops back to scored; the 95 one waits for the cap to expire.
+        self.assertEqual(self.statuses(), {("Beta", 95): "queued", ("Beta", 83): "scored"})
+        self.assertEqual(self.claim("w", now=NOW + timedelta(days=2))["fit_score"], 95)
+
+    def test_submission_window_is_enforced_from_the_ledger(self) -> None:
+        ingest_candidates(
+            self.connection, [self.job("ElevenLabs", 1, 20), self.job("ElevenLabs", 2, 19)], self.run_id
+        )
+        score_jobs(self.connection, self.cfg, self.run_id, now=NOW)
+        job = self.claim("w")
+        submit_job(
+            self.connection, job["id"], "w", confirmation_url=job["application_url"],
+            evidence="Thanks", resume_verified=True, submit_applications=True,
+        )
+        self.assertIsNone(self.claim("w"))
+        limit = active_limits(self.connection, self.policies)["policy:elevenlabs"]
+        self.assertEqual(limit["source"], "policy")
+        later = datetime.now(timezone.utc) + timedelta(days=91)
+        self.assertEqual(self.claim("w", now=later)["fit_score"], 94)
 
 
 if __name__ == "__main__":

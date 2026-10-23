@@ -9,7 +9,39 @@
       ],
       "handling": "manual_review",
       "documentation": "google.md",
-      "reason": "Preserve the user's limited rolling application allowance for carefully selected roles."
+      "reason": "Preserve the user's limited rolling application allowance for carefully selected roles.",
+      "application_limit": {
+        "description": "The user allows at most three Google applications in a rolling 30-day window."
+      }
+    },
+    {
+      "id": "amazon",
+      "company_names": [
+        "Amazon",
+        "Amazon.com",
+        "Amazon Web Services",
+        "AWS"
+      ],
+      "handling": "auto_apply",
+      "documentation": "amazon.md",
+      "reason": "amazon.jobs allows ten active applications per account; spend them on the best fits.",
+      "application_limit": {
+        "description": "amazon.jobs refuses new applications while the account has ten active ones."
+      }
+    },
+    {
+      "id": "elevenlabs",
+      "company_names": [
+        "ElevenLabs"
+      ],
+      "handling": "auto_apply",
+      "documentation": "elevenlabs.md",
+      "reason": "ElevenLabs' Ashby board accepts one application per candidate every 90 days.",
+      "application_limit": {
+        "description": "ElevenLabs accepts one application per candidate every 90 days.",
+        "max_submissions": 1,
+        "window_days": 90
+      }
     }
   ]
 }

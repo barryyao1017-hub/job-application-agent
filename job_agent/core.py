@@ -20,7 +20,7 @@ DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "job-agent.sqlite3"
 DEFAULT_RESUME_TEXT_PATH = PROJECT_ROOT / "data" / "resume.txt"
 DEFAULT_COMPANY_POLICIES_PATH = (
     PROJECT_ROOT
-    / ".agents"
+    / ".claude"
     / "skills"
     / "company-application-policies"
     / "references"
@@ -111,6 +111,7 @@ def load_config(path: Path | str = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
     config.setdefault("submit_applications", config.get("review_only") is False)
     if not isinstance(config["submit_applications"], bool):
         raise ValueError("submit_applications must be true or false")
+    config.setdefault("limited_company_minimum_fit_score", 90)
     config.setdefault("max_parallel_workers", 2)
     workers = config["max_parallel_workers"]
     if isinstance(workers, bool) or not isinstance(workers, int) or not 1 <= workers <= 3:
@@ -173,9 +174,35 @@ def load_company_policies(path: Path | str = DEFAULT_COMPANY_POLICIES_PATH) -> l
                 "handling": handling,
                 "documentation": str(document_path),
                 "reason": str(raw.get("reason") or "").strip(),
+                "application_limit": parse_application_limit(policy_id, raw.get("application_limit")),
             }
         )
     return policies
+
+
+def parse_application_limit(policy_id: str, raw: Any) -> dict[str, Any] | None:
+    """A policy's ``application_limit``: the ATS caps how many applications one account sends.
+
+    ``max_submissions`` within ``window_days`` is enforced from the ledger's own
+    submissions (Ashby: one per company per 90 days). Other caps, such as Amazon's
+    ten active applications, are only described: the ledger cannot see them, so
+    they take effect when a worker reports one (``block --category application_limit``).
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict) or not str(raw.get("description") or "").strip():
+        raise ValueError(f"Company policy {policy_id} application_limit needs a description")
+    limit: dict[str, Any] = {"description": str(raw["description"]).strip()}
+    for key in ("max_submissions", "window_days"):
+        value = raw.get(key)
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError(f"Company policy {policy_id} application_limit.{key} must be a positive integer")
+        limit[key] = value
+    if ("max_submissions" in limit) != ("window_days" in limit):
+        raise ValueError(f"Company policy {policy_id} needs both max_submissions and window_days, or neither")
+    return limit
 
 
 def match_company_policy(
@@ -245,6 +272,43 @@ def infer_source(url: str) -> str:
     return host.removeprefix("www.")
 
 
+ATS_HOST_MARKERS = (
+    ("myworkdayjobs", "workday"),
+    ("myworkdaysite", "workday"),
+    ("workday", "workday"),
+    ("greenhouse", "greenhouse"),
+    ("lever.co", "lever"),
+    ("ashbyhq", "ashby"),
+    ("amazon.jobs", "amazon"),
+    ("icims", "icims"),
+    ("smartrecruiters", "smartrecruiters"),
+    ("successfactors", "successfactors"),
+    ("sapsf", "successfactors"),
+    ("taleo", "taleo"),
+    ("oraclecloud", "oracle"),
+    ("eightfold", "eightfold"),
+    ("jobvite", "jobvite"),
+)
+
+
+def infer_ats(url: str | None, feed_ats: str | None = None) -> str:
+    """The applicant tracking system behind an application URL.
+
+    A known ATS host wins, then a Greenhouse embed's ``gh_jid`` parameter on a
+    company careers page, then the feed's ATS, then the bare host.
+    """
+    parts = urlsplit(url or "")
+    host = parts.netloc.lower()
+    for marker, ats in ATS_HOST_MARKERS:
+        if marker in host:
+            return ats
+    if "gh_jid=" in parts.query.lower():
+        return "greenhouse"
+    if feed_ats:
+        return str(feed_ats).strip().lower()
+    return host.removeprefix("www.") or "unknown"
+
+
 def infer_minimum_years(description: str) -> int | None:
     match = re.search(
         r"(\d{1,2})\s*(?:\+|plus)?\s*(?:-\s*\d{1,2}\s*)?years?(?:\s+of)?\s+(?:relevant\s+|professional\s+|industry\s+)?experience",
@@ -307,6 +371,83 @@ def location_term_pattern(term: str) -> re.Pattern[str]:
     return re.compile(start + re.escape(term) + end)
 
 
+NON_US_LOCATION_PATTERN = re.compile(
+    r"\b(?:uk|u\.k\.|united kingdom|england|scotland|wales|london|manchester|edinburgh|ireland|dublin|"
+    r"france|paris|germany|berlin|munich|hamburg|switzerland|zurich|geneva|netherlands|amsterdam|"
+    r"belgium|brussels|luxembourg|austria|vienna|spain|madrid|barcelona|portugal|lisbon|italy|milan|"
+    r"rome|sweden|stockholm|norway|oslo|denmark|copenhagen|finland|helsinki|iceland|estonia|tallinn|"
+    r"latvia|riga|lithuania|vilnius|poland|warsaw|krakow|czechia|czech republic|prague|slovakia|"
+    r"hungary|budapest|romania|bucharest|bulgaria|sofia|greece|athens|croatia|zagreb|serbia|belgrade|"
+    r"slovenia|ukraine|kyiv|kiev|turkey|t[uü]rkiye|istanbul|cyprus|malta|israel|tel aviv|uae|"
+    r"united arab emirates|dubai|abu dhabi|saudi arabia|riyadh|qatar|doha|egypt|cairo|nigeria|lagos|"
+    r"kenya|nairobi|south africa|cape town|johannesburg|india|bangalore|bengaluru|hyderabad|pune|"
+    r"chennai|mumbai|delhi|gurgaon|gurugram|noida|pakistan|china|shanghai|beijing|shenzhen|hong kong|"
+    r"taiwan|taipei|japan|tokyo|korea|seoul|singapore|malaysia|kuala lumpur|indonesia|jakarta|"
+    r"philippines|manila|vietnam|ho chi minh|hanoi|thailand|bangkok|australia|sydney|melbourne|"
+    r"new zealand|auckland|canada|toronto|vancouver|montreal|ottawa|calgary|waterloo|ontario|quebec|"
+    r"british columbia|alberta|brazil|s[aã]o paulo|mexico|argentina|buenos aires|colombia|bogot[aá]|"
+    r"chile|santiago|peru|lima|costa rica|uruguay|emea|apac|latam|europe|european union|eu)\b"
+)
+US_STATE_NAMES = (
+    "alabama|alaska|arizona|arkansas|california|colorado|connecticut|delaware|florida|georgia|hawaii|"
+    "idaho|illinois|indiana|iowa|kansas|kentucky|louisiana|maine|maryland|massachusetts|michigan|"
+    "minnesota|mississippi|missouri|montana|nebraska|nevada|new hampshire|new jersey|new mexico|"
+    "new york|north carolina|north dakota|ohio|oklahoma|oregon|pennsylvania|rhode island|"
+    "south carolina|south dakota|tennessee|texas|utah|vermont|virginia|washington|west virginia|"
+    "wisconsin|wyoming|district of columbia"
+)
+US_STATE_CODES = (
+    "al|ak|az|ar|ca|co|ct|de|dc|fl|ga|hi|id|il|in|ia|ks|ky|la|me|md|ma|mi|mn|ms|mo|mt|ne|nv|nh|nj|nm|"
+    "ny|nc|nd|oh|ok|or|pa|ri|sc|sd|tn|tx|ut|vt|va|wa|wv|wi|wy"
+)
+US_LOCATION_PATTERN = re.compile(
+    rf"\b(?:us|u\.s\.?|usa|u\.s\.a\.|united states|north america|americas|{US_STATE_NAMES}|"
+    r"nyc|boston|chicago|austin|dallas|houston|denver|boulder|atlanta|miami|pittsburgh|philadelphia|"
+    r"phoenix|salt lake city|portland|minneapolis|detroit|raleigh|durham|nashville|baltimore|"
+    r"san francisco|bay area|silicon valley|los angeles|seattle)\b"
+    rf"|,\s*(?:{US_STATE_CODES})\b"
+)
+# Words that say how the work is done rather than where; a location made only of
+# these (plus punctuation) is a bare "Remote".
+WORK_MODE_PATTERN = re.compile(
+    r"\b(?:remote|virtual|hybrid|anywhere|fully|work from home|wfh|flexible|first|friendly|"
+    r"optional|option|or|and|in|the|based|location|locations|multiple)\b|[^a-z]"
+)
+REMOTE_TERMS = ("remote", "virtual")
+
+
+def location_matches(location: str, remote: bool, config: dict[str, Any]) -> bool:
+    """True when at least one listed location is a preferred one or a US remote option.
+
+    Boards list several locations separated by " | ". A part naming a non-US place
+    never counts. A remote part (the posting's remote flag, or "remote" in the
+    text) counts only when it also names the US (a state, a state code after a
+    comma, a major US city, "US"), names a preferred place, or is a bare
+    "Remote": Ashby flags Europe-only roles as remote, so ``"Prague"`` with a
+    remote flag is rejected while ``"Austin, TX"`` with one is accepted.
+    """
+    lower = location.lower()
+    if not lower.strip():
+        return True
+    places = [
+        location_term_pattern(str(term))
+        for term in config.get("preferred_location_terms", ())
+        if str(term).strip().lower() not in REMOTE_TERMS
+    ]
+    for part in (piece.strip() for piece in lower.split("|")):
+        if not part:
+            continue
+        us = bool(US_LOCATION_PATTERN.search(part))
+        if NON_US_LOCATION_PATTERN.search(part) and not us:
+            continue
+        if any(pattern.search(part) for pattern in places):
+            return True
+        is_remote = remote or any(term in part for term in REMOTE_TERMS)
+        if is_remote and (us or not WORK_MODE_PATTERN.sub("", part)):
+            return True
+    return False
+
+
 def score_candidate(candidate: dict[str, Any], config: dict[str, Any], now: datetime | None = None) -> ScoreResult:
     current = now or utc_now()
     title = str(candidate.get("title") or "").strip()
@@ -341,12 +482,8 @@ def score_candidate(candidate: dict[str, Any], config: dict[str, Any], now: date
     if general_software or not (role_matches or ML_SIGNAL_PATTERN.search(title_lower)):
         return ScoreResult(0, [], "role is outside the ML and Data pilot")
 
-    location_lower = location.lower()
-    remote = bool(candidate.get("remote")) or "remote" in location_lower
-    location_match = remote or any(
-        location_term_pattern(term).search(location_lower)
-        for term in config["preferred_location_terms"]
-    )
+    remote = bool(candidate.get("remote"))
+    location_match = location_matches(location, remote, config) if location else remote
     if location and not location_match:
         return ScoreResult(0, [], "location is outside California, Washington, or US remote")
 
@@ -399,6 +536,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     canonical_url TEXT NOT NULL UNIQUE,
     ats_job_id TEXT,
     company TEXT NOT NULL,
+    ats TEXT,
     title TEXT NOT NULL,
     location TEXT,
     remote INTEGER NOT NULL DEFAULT 0,
@@ -463,6 +601,22 @@ CREATE TABLE IF NOT EXISTS run_boards (
 
 CREATE INDEX IF NOT EXISTS run_boards_run ON run_boards(run_id);
 
+-- Application caps a site reported for a company (Amazon's ten active
+-- applications, Ashby's one per 90 days). While one is active (not cleared,
+-- until unset or in the future) claim skips the company and leaves its jobs
+-- queued. company_key is the policy id when a policy matches, else the
+-- normalized company name.
+CREATE TABLE IF NOT EXISTS company_limits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company TEXT NOT NULL,
+    company_key TEXT NOT NULL,
+    reported_at TEXT NOT NULL,
+    until TEXT,
+    cleared_at TEXT,
+    job_id TEXT REFERENCES jobs(id),
+    message TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS notifications (
     notification_key TEXT PRIMARY KEY,
     job_id TEXT REFERENCES jobs(id),
@@ -490,9 +644,17 @@ def connect_db(path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
         ("confirmation_evidence", "TEXT"),
         ("skill_score", "INTEGER"),
         ("skill_rationale", "TEXT"),
+        ("ats", "TEXT"),
     ):
         if name not in existing_columns:
             connection.execute(f"ALTER TABLE jobs ADD COLUMN {name} {column_type}")
+    for row in connection.execute(
+        "SELECT id, application_url, canonical_url FROM jobs WHERE ats IS NULL OR ats LIKE '%.%'"
+    ).fetchall():
+        connection.execute(
+            "UPDATE jobs SET ats=? WHERE id=?",
+            (infer_ats(row["application_url"] or row["canonical_url"]), row["id"]),
+        )
     return connection
 
 
@@ -583,6 +745,7 @@ def ingest_candidates(
             parse_skill_score(candidate.get("skill_score")),
             str(candidate.get("skill_rationale") or "").strip() or None,
             application_url,
+            infer_ats(application_url, candidate.get("ats")),
             now,
         )
         if not values[6] or not values[7]:
@@ -594,8 +757,8 @@ def ingest_candidates(
                     id, run_id, source, source_url, canonical_url, ats_job_id,
                     company, title, location, remote, posted_at, discovered_at,
                     description, minimum_years, active, skill_score, skill_rationale,
-                    application_url, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    application_url, ats, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 values,
             )
@@ -603,6 +766,138 @@ def ingest_candidates(
         except sqlite3.IntegrityError:
             duplicates.append(canonical_url)
     return {"run_id": run_id, "inserted": inserted, "duplicates": duplicates}
+
+
+APPLICATION_LIMIT_CATEGORY = "application_limit"
+
+
+def company_key(company: str, policies: Iterable[dict[str, Any]]) -> str:
+    """One key per employer: its policy id when a policy matches (so aliases share it), else its name."""
+    policy = match_company_policy(company, policies)
+    return f"policy:{policy['id']}" if policy else normalize_company_name(company)
+
+
+def limited_company_keys(connection: sqlite3.Connection, policies: list[dict[str, Any]]) -> set[str]:
+    """Companies with an application limit: one in their policy, or one a site has reported."""
+    keys = {f"policy:{policy['id']}" for policy in policies if policy.get("application_limit")}
+    keys.update(
+        row["company_key"]
+        for row in connection.execute("SELECT DISTINCT company_key FROM company_limits").fetchall()
+    )
+    return keys
+
+
+def queue_threshold(
+    company: str,
+    config: dict[str, Any],
+    policies: list[dict[str, Any]],
+    limited_keys: set[str],
+) -> int:
+    """Fit needed to queue a job: higher for companies that cap applications, to spend the cap on the best fits."""
+    base = int(config["minimum_fit_score"])
+    if company_key(company, policies) in limited_keys:
+        return max(base, int(config.get("limited_company_minimum_fit_score", 90)))
+    return base
+
+
+def active_limits(
+    connection: sqlite3.Connection,
+    policies: list[dict[str, Any]],
+    now: datetime | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Companies whose application cap is in force now, keyed by ``company_key``."""
+    current = now or utc_now()
+    active: dict[str, dict[str, Any]] = {}
+    for row in connection.execute(
+        "SELECT * FROM company_limits WHERE cleared_at IS NULL ORDER BY reported_at"
+    ).fetchall():
+        until = parse_datetime(row["until"])
+        if until is None or until > current:
+            active[row["company_key"]] = {
+                "company": row["company"],
+                "source": "reported",
+                "reason": row["message"],
+                "until": row["until"],
+            }
+    windowed = [policy for policy in policies if (policy.get("application_limit") or {}).get("max_submissions")]
+    if not windowed:
+        return active
+    submissions = connection.execute(
+        "SELECT company, submitted_at FROM jobs WHERE status='submitted' AND submitted_at IS NOT NULL"
+    ).fetchall()
+    for policy in windowed:
+        limit = policy["application_limit"]
+        window = timedelta(days=limit["window_days"])
+        recent = sorted(
+            submitted
+            for row in submissions
+            if normalize_company_name(row["company"]) in policy["normalized_company_names"]
+            and (submitted := parse_datetime(row["submitted_at"])) is not None
+            and submitted > current - window
+        )
+        if len(recent) >= limit["max_submissions"]:
+            active.setdefault(
+                f"policy:{policy['id']}",
+                {
+                    "company": policy["company_names"][0],
+                    "source": "policy",
+                    "reason": limit["description"],
+                    "until": iso_utc(recent[len(recent) - limit["max_submissions"]] + window),
+                },
+            )
+    return active
+
+
+def deferred_jobs(
+    connection: sqlite3.Connection,
+    policies: list[dict[str, Any]],
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Queued jobs that claim passes over because their company's application cap is in force."""
+    active = active_limits(connection, policies, now)
+    if not active:
+        return []
+    deferred = []
+    for row in connection.execute(
+        "SELECT id, company, title, fit_score FROM jobs WHERE status='queued' ORDER BY fit_score DESC"
+    ).fetchall():
+        limit = active.get(company_key(row["company"], policies))
+        if limit:
+            deferred.append({**dict(row), "until": limit["until"], "reason": limit["reason"]})
+    return deferred
+
+
+def clear_limits(
+    connection: sqlite3.Connection,
+    company: str,
+    policies: list[dict[str, Any]],
+) -> int:
+    """Lift a reported cap, e.g. after the user withdrew applications. Returns how many records were cleared."""
+    cursor = connection.execute(
+        "UPDATE company_limits SET cleared_at=? WHERE company_key=? AND cleared_at IS NULL",
+        (iso_utc(), company_key(company, policies)),
+    )
+    return cursor.rowcount
+
+
+def requeue_jobs(connection: sqlite3.Connection, job_ids: Iterable[str]) -> list[str]:
+    """Put blocked or ready-for-review jobs back in the queue for a fresh attempt."""
+    requeued = []
+    for job_id in job_ids:
+        row = connection.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+        if row is None:
+            raise ValueError(f"Unknown job: {job_id}")
+        if row["status"] not in ("blocked", "ready_for_review"):
+            raise ValueError(f"Job {job_id} is {row['status']}; only blocked or ready_for_review jobs can be re-queued")
+        connection.execute(
+            """
+            UPDATE jobs SET status='queued', blocker_category=NULL, blocker_message=NULL,
+                claimed_by=NULL, claimed_at=NULL, updated_at=? WHERE id=?
+            """,
+            (iso_utc(), job_id),
+        )
+        requeued.append(job_id)
+    return requeued
 
 
 def score_jobs(
@@ -672,21 +967,26 @@ def score_jobs(
                 )
                 scored.append(row["id"])
 
-    # Every job at or above the threshold is queued; there is no daily cap.
-    threshold = int(config["minimum_fit_score"])
-    queue_params: list[Any] = [threshold]
+    # Every job at or above its company's threshold is queued; there is no daily cap.
+    queue_params: list[Any] = [int(config["minimum_fit_score"])]
     queue_where = "status='scored' AND fit_score >= ?"
     if run_id:
         queue_where += " AND run_id = ?"
         queue_params.append(run_id)
     selected = connection.execute(
         f"""
-        SELECT id FROM jobs WHERE {queue_where}
+        SELECT id, company, fit_score FROM jobs WHERE {queue_where}
         ORDER BY fit_score DESC, COALESCE(posted_at, discovered_at) DESC
         """,
         queue_params,
     ).fetchall()
-    queued = [row["id"] for row in selected]
+    limited = limited_company_keys(connection, policies)
+    queued = [
+        row["id"]
+        for row in selected
+        if row["fit_score"] >= queue_threshold(row["company"], config, policies, limited)
+    ]
+    held = [row["id"] for row in selected if row["id"] not in set(queued)]
     if queued:
         placeholders = ",".join("?" for _ in queued)
         connection.execute(
@@ -698,6 +998,8 @@ def score_jobs(
         "skipped": skipped,
         "manual_review": manual_review,
         "queued": queued,
+        # Scored above minimum_fit_score but below the higher bar for companies with an application limit.
+        "held_below_limited_threshold": held,
     }
 
 
@@ -706,19 +1008,35 @@ def claim_next(
     worker_id: str,
     company_policies_path: Path | str = DEFAULT_COMPANY_POLICIES_PATH,
     run_id: str | None = None,
+    *,
+    limited_minimum_fit_score: int = 90,
+    now: datetime | None = None,
 ) -> dict[str, Any] | None:
     """Claim the best queued job and log the attempt against ``run_id`` (default: latest running run).
 
     A company with a job already claimed is passed over, so parallel workers never
-    sign in to, or create, the same company's account at the same time.
+    sign in to, or create, the same company's account at the same time. So is a
+    company whose application cap is in force (``active_limits``); its jobs stay
+    queued. A queued job at a company with an application limit that scores below
+    ``limited_minimum_fit_score`` goes back to ``scored``.
     """
     policies = load_company_policies(company_policies_path)
     connection.execute("BEGIN IMMEDIATE")
     try:
         queued_rows = connection.execute(
-            "SELECT id, company FROM jobs WHERE status='queued'"
+            "SELECT id, company, fit_score FROM jobs WHERE status='queued'"
         ).fetchall()
+        limited = limited_company_keys(connection, policies)
         for queued_row in queued_rows:
+            if (
+                company_key(queued_row["company"], policies) in limited
+                and (queued_row["fit_score"] or 0) < limited_minimum_fit_score
+            ):
+                connection.execute(
+                    "UPDATE jobs SET status='scored', updated_at=? WHERE id=? AND status='queued'",
+                    (iso_utc(), queued_row["id"]),
+                )
+                continue
             policy = match_company_policy(queued_row["company"], policies)
             if policy and policy["handling"] == "manual_review":
                 connection.execute(
@@ -734,16 +1052,23 @@ def claim_next(
                         queued_row["id"],
                     ),
                 )
-        row = connection.execute(
-            """
-            SELECT * FROM jobs WHERE status='queued'
-                AND LOWER(TRIM(company)) NOT IN (
-                    SELECT LOWER(TRIM(company)) FROM jobs WHERE status='claimed'
-                )
-            ORDER BY fit_score DESC, COALESCE(posted_at, discovered_at) DESC
-            LIMIT 1
-            """
-        ).fetchone()
+        capped = active_limits(connection, policies, now)
+        row = next(
+            (
+                candidate
+                for candidate in connection.execute(
+                    """
+                    SELECT * FROM jobs WHERE status='queued'
+                        AND LOWER(TRIM(company)) NOT IN (
+                            SELECT LOWER(TRIM(company)) FROM jobs WHERE status='claimed'
+                        )
+                    ORDER BY fit_score DESC, COALESCE(posted_at, discovered_at) DESC
+                    """
+                ).fetchall()
+                if company_key(candidate["company"], policies) not in capped
+            ),
+            None,
+        )
         if row is None:
             connection.execute("COMMIT")
             return None
@@ -751,6 +1076,7 @@ def claim_next(
         connection.execute(
             """
             UPDATE jobs SET status='claimed', claimed_by=?, claimed_at=?,
+                blocker_category=NULL, blocker_message=NULL,
                 attempts=attempts+1, updated_at=? WHERE id=? AND status='queued'
             """,
             (worker_id, now, now, row["id"]),
@@ -883,11 +1209,55 @@ def attempt_stats(
     }
 
 
+def attempt_breakdown(
+    connection: sqlite3.Connection,
+    group_by: str,
+    *,
+    run_id: str | None = None,
+    since: str | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Attempt outcomes, submission rate and blocker categories per ATS (``group_by="ats"``) or company."""
+    if group_by not in ("ats", "company"):
+        raise ValueError(f"Cannot group attempts by {group_by}")
+    clauses = ["attempts.finished_at IS NOT NULL"]
+    params: list[Any] = []
+    if run_id:
+        clauses.append("attempts.run_id=?")
+        params.append(run_id)
+    if since:
+        clauses.append("attempts.claimed_at >= ?")
+        params.append(since)
+    groups: dict[str, dict[str, Any]] = {}
+    for row in connection.execute(
+        f"""
+        SELECT COALESCE(jobs.{group_by}, 'unknown') AS grp, attempts.outcome,
+            jobs.blocker_category, COUNT(*) AS count
+        FROM attempts JOIN jobs ON jobs.id = attempts.job_id
+        WHERE {' AND '.join(clauses)}
+        GROUP BY grp, attempts.outcome, jobs.blocker_category
+        """,
+        params,
+    ).fetchall():
+        group = groups.setdefault(
+            row["grp"],
+            {"attempts": 0, "outcomes": {outcome: 0 for outcome in ATTEMPT_OUTCOMES}, "blockers": {}},
+        )
+        group["attempts"] += row["count"]
+        group["outcomes"][row["outcome"]] = group["outcomes"].get(row["outcome"], 0) + row["count"]
+        if row["outcome"] == "blocked":
+            category = row["blocker_category"] or "uncategorized"
+            group["blockers"][category] = group["blockers"].get(category, 0) + row["count"]
+    for group in groups.values():
+        group["submission_rate_percent"] = round(100 * group["outcomes"]["submitted"] / group["attempts"], 1)
+    return dict(sorted(groups.items()))
+
+
 def outcome_report(
     connection: sqlite3.Connection,
     *,
     run_id: str | None = None,
     since: str | None = None,
+    policies: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Submission rate over attempts, the jobs in each outcome, blockers by category, discovery."""
     clauses = [f"status IN ({','.join('?' for _ in ATTEMPTED_STATUSES)})"]
@@ -963,12 +1333,34 @@ def outcome_report(
                 run_params,
             ).fetchall()
         ]
+    skip_params: list[Any] = []
+    skip_where = "status='skipped'"
+    if run_id:
+        skip_where += " AND run_id=?"
+        skip_params.append(run_id)
+    if since:
+        skip_where += " AND updated_at >= ?"
+        skip_params.append(since)
+    skipped_by_ats = {
+        row["ats"]: row["count"]
+        for row in connection.execute(
+            f"SELECT COALESCE(ats, 'unknown') AS ats, COUNT(*) AS count FROM jobs WHERE {skip_where} GROUP BY 1 ORDER BY 1",
+            skip_params,
+        ).fetchall()
+    }
+    policies = policies or []
     return {
         **attempt_stats(connection, run_id=run_id, since=since),
         "counts": counts,
         "submitted": submitted,
         "ready_for_review": ready,
         "blockers": blockers,
+        # A blocked attempt's category is the job's latest one; a retried job reports its newest blocker.
+        "by_ats": attempt_breakdown(connection, "ats", run_id=run_id, since=since),
+        "by_company": attempt_breakdown(connection, "company", run_id=run_id, since=since),
+        "skipped_by_ats": skipped_by_ats,
+        "application_limits": list(active_limits(connection, policies).values()),
+        "deferred": deferred_jobs(connection, policies),
         "discovery": discovery,
     }
 
@@ -980,19 +1372,47 @@ def block_job(
     category: str,
     message: str,
     review_url: str | None = None,
+    *,
+    policies: list[dict[str, Any]] | None = None,
+    until: str | None = None,
 ) -> dict[str, Any]:
+    """Record a blocked attempt.
+
+    ``application_limit`` means the site refused because the account hit its
+    application cap: the cap is recorded for the company and the job goes back to
+    ``queued`` (deferred, not blocked) so it is retried once the cap lifts.
+    """
     row = connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
     if row is None:
         raise ValueError(f"Unknown job: {job_id}")
     if row["status"] != "claimed" or row["claimed_by"] != worker_id:
         raise ValueError("Job is not claimed by this worker")
+    status = "blocked"
+    if category == APPLICATION_LIMIT_CATEGORY:
+        if until is not None and parse_datetime(until) is None:
+            raise ValueError(f"--until is not an ISO date or timestamp: {until}")
+        status = "queued"
+        connection.execute(
+            """
+            INSERT INTO company_limits(company, company_key, reported_at, until, job_id, message)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                row["company"],
+                company_key(row["company"], policies or []),
+                iso_utc(),
+                iso_utc(parse_datetime(until)) if until else None,
+                job_id,
+                message,
+            ),
+        )
     connection.execute(
         """
-        UPDATE jobs SET status='blocked', blocker_category=?, blocker_message=?,
+        UPDATE jobs SET status=?, blocker_category=?, blocker_message=?,
             review_url=COALESCE(?, review_url),
             claimed_by=NULL, claimed_at=NULL, updated_at=? WHERE id=?
         """,
-        (category, message, review_url, iso_utc(), job_id),
+        (status, category, message, review_url, iso_utc(), job_id),
     )
     finish_attempt(connection, job_id, "blocked")
     return dict(connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone())
@@ -1113,7 +1533,10 @@ def digest_payload(
         lines.append(
             f"- {row['status']}: {row['company']} — {row['title']} — {row['url']}{policy}"
         )
-    outcomes = outcome_report(connection, run_id=run_id)
+    policies = load_company_policies(
+        config.get("company_policies_path", DEFAULT_COMPANY_POLICIES_PATH)
+    )
+    outcomes = outcome_report(connection, run_id=run_id, policies=policies)
     lines.append("")
     if outcomes["attempts"]:
         lines.append(
@@ -1122,6 +1545,21 @@ def digest_payload(
         )
         for category, jobs in sorted(outcomes["blockers"].items()):
             lines.append(f"Blocked — {category}: {len(jobs)}")
+        lines.append(
+            "By ATS: "
+            + ", ".join(
+                f"{ats} {group['outcomes']['submitted']}/{group['attempts']}"
+                for ats, group in outcomes["by_ats"].items()
+            )
+        )
+    if outcomes["deferred"]:
+        deferred: dict[str, int] = {}
+        for job in outcomes["deferred"]:
+            deferred[job["company"]] = deferred.get(job["company"], 0) + 1
+        lines.append(
+            "Deferred by an application limit (still queued): "
+            + ", ".join(f"{company} ({count})" for company, count in sorted(deferred.items()))
+        )
     if discovery["companies_checked"]:
         lines.append("")
         if discovery["companies_with_matches"]:
