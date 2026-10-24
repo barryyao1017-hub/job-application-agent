@@ -415,6 +415,7 @@ WORK_MODE_PATTERN = re.compile(
     r"optional|option|or|and|in|the|based|location|locations|multiple)\b|[^a-z]"
 )
 REMOTE_TERMS = ("remote", "virtual")
+WASHINGTON_DC_PATTERN = re.compile(r"\bwashington,?\s*d\.?\s?c\b\.?|\bdistrict of columbia\b")
 
 
 def location_matches(location: str, remote: bool, config: dict[str, Any]) -> bool:
@@ -441,7 +442,9 @@ def location_matches(location: str, remote: bool, config: dict[str, Any]) -> boo
         us = bool(US_LOCATION_PATTERN.search(part) or US_STATE_CODE_PATTERN.search(original))
         if NON_US_LOCATION_PATTERN.search(part) and not us:
             continue
-        if any(pattern.search(part) for pattern in places):
+        # "washington" in preferred_location_terms means the state, not Washington, DC.
+        place_text = WASHINGTON_DC_PATTERN.sub(" ", part)
+        if any(pattern.search(place_text) for pattern in places):
             return True
         is_remote = remote or any(term in part for term in REMOTE_TERMS)
         if is_remote and (us or not WORK_MODE_PATTERN.sub("", part)):

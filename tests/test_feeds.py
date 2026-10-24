@@ -509,6 +509,15 @@ class LocationFilterTests(unittest.TestCase):
         # Lower-case "or"/"in" are words, not Oregon/Indiana.
         self.assertFalse(self.check("Canada - Remote (ON, AB, BC, or NS Only)"))
 
+    def test_washington_means_the_state_not_dc(self) -> None:
+        config = {"preferred_location_terms": ["washington", "seattle"]}
+        from job_agent.feeds import location_matches
+
+        self.assertTrue(location_matches("Redmond, Washington", False, config))
+        self.assertFalse(location_matches("Washington, DC", False, config))
+        self.assertFalse(location_matches("Washington D.C.", False, config))
+        self.assertTrue(location_matches("Washington, DC | Seattle, Washington", False, config))
+
     def test_semicolon_separated_locations_are_checked_one_by_one(self) -> None:
         self.assertTrue(self.check("Menlo Park, CA; New York, NY; Toronto, ON"))
         self.assertFalse(self.check("Toronto, ON; London, UK", remote=True))
