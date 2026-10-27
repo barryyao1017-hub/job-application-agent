@@ -23,10 +23,12 @@ from __future__ import annotations
 import html
 import json
 import re
+import ssl
 import time
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -59,11 +61,28 @@ DETAIL_WORKERS = 6
 WORKDAY_PAGE_SIZE = 20
 AMAZON_PAGE_SIZE = 100
 WORKDAY_POSTED_PATTERN = re.compile(r"posted\s+(\d+)\+?\s+days?\s+ago", re.IGNORECASE)
+# CA bundles to fall back on when this Python ships none: python.org's macOS
+# installer leaves etc/openssl empty until "Install Certificates.command" runs.
+FALLBACK_CA_FILES = ("/etc/ssl/cert.pem", "/opt/homebrew/etc/ca-certificates/cert.pem", "/usr/local/etc/ca-certificates/cert.pem")
 
 Fetch = Callable[[str, dict[str, Any] | None], Any]
 
 
 # --- HTTP ----------------------------------------------------------------------
+
+
+@lru_cache(maxsize=1)
+def ssl_context() -> ssl.SSLContext:
+    """Default certificate verification, with a system CA bundle when Python has none."""
+    context = ssl.create_default_context()
+    defaults = ssl.get_default_verify_paths()
+    if defaults.cafile or defaults.capath:
+        return context
+    for candidate in FALLBACK_CA_FILES:
+        if Path(candidate).is_file():
+            context.load_verify_locations(cafile=candidate)
+            break
+    return context
 
 
 def fetch_json(url: str, payload: dict[str, Any] | None = None) -> Any:
@@ -74,7 +93,9 @@ def fetch_json(url: str, payload: dict[str, Any] | None = None) -> Any:
         headers["Content-Type"] = "application/json"
         data = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(url, data=data, headers=headers)
-    with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+    with urllib.request.urlopen(
+        request, timeout=REQUEST_TIMEOUT_SECONDS, context=ssl_context()
+    ) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
