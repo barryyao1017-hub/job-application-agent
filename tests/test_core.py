@@ -28,6 +28,7 @@ from job_agent.core import (
     needs_tailored_resume,
     outcome_report,
     recency_window_hours,
+    board_catchup_hours,
     record_discovery,
     record_outside_submission,
     recover_stale_claims,
@@ -851,6 +852,63 @@ class GoogleTests(unittest.TestCase):
         self.assertFalse(claimed["resume_tailored"])
         self.assertTrue(claimed["tailored_resume_missing"])
         self.assertTrue(claimed["submit"])
+        self.assertIsNone(claimed["resume_pdf_path"], "no approved PDF configured")
+
+    def test_claim_offers_the_approved_pdf_for_pdf_only_forms(self) -> None:
+        import contextlib
+        import io
+        import json
+
+        from job_agent.cli import main
+
+        pdf = self.root / "Jiayi_Yao_resume.pdf"
+        pdf.write_bytes(b"%PDF-1.4")
+        config_path = self.root / "config.json"
+        config_path.write_text(json.dumps({**self.cfg, "approved_resume_pdf_path": str(pdf)}), encoding="utf-8")
+        ingest_candidates(self.connection, [self.job("Acme", 1, 15)], self.run_id)
+        score_jobs(self.connection, self.cfg, self.run_id, now=NOW)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            main(["--config", str(config_path), "--db", str(self.root / "jobs.sqlite3"), "claim", "--worker-id", "w"])
+        claimed = json.loads(out.getvalue())
+        self.assertEqual(claimed["resume_path"], str(self.resume))
+        self.assertEqual(claimed["resume_pdf_path"], str(pdf))
+        config_path.write_text(json.dumps({**self.cfg, "approved_resume_pdf_path": str(self.resume)}), encoding="utf-8")
+        with self.assertRaises(ValueError):
+            load_config(config_path)
+
+    def test_a_board_that_failed_last_run_reaches_back_to_its_last_good_fetch(self) -> None:
+        def run_at(run_id: str, hours_ago: int, boards: list[dict]) -> None:
+            create_run(self.connection, run_id)
+            self.connection.execute(
+                "UPDATE runs SET started_at=? WHERE id=?", ((NOW - timedelta(hours=hours_ago)).isoformat(), run_id)
+            )
+            record_discovery(self.connection, run_id, boards)
+
+        good = {"ats": "workday", "fetched": 40, "kept": 0, "errors": []}
+        failed = {"ats": "workday", "fetched": 0, "kept": 0, "errors": ["URLError: nodename nor servname"]}
+        run_at("monday", 48, [{"company": "NVIDIA", **good}, {"company": "Acme", **good}])
+        run_at("tuesday", 24, [
+            {"company": "NVIDIA", **failed},
+            {"company": "Acme", **good},
+            {"company": "Newco", **failed},
+        ])
+        self.assertEqual(recency_window_hours(self.connection, self.cfg, NOW), 27)
+        self.assertEqual(
+            board_catchup_hours(self.connection, self.cfg, NOW),
+            {"NVIDIA": 51},
+            "Acme worked and Newco never had a good fetch, so both use the run's window",
+        )
+        run_at("wednesday", 0, [])
+        ingest_candidates(self.connection, [
+            {**candidate(posted_at=(NOW - timedelta(hours=40)).isoformat()), "company": "NVIDIA",
+             "application_url": "https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite/job/JR1"},
+            {**candidate(posted_at=(NOW - timedelta(hours=40)).isoformat()), "company": "Acme",
+             "application_url": "https://job-boards.greenhouse.io/acme/jobs/40"},
+        ], "wednesday")
+        score_jobs(self.connection, self.cfg, "wednesday")
+        statuses = dict(self.connection.execute("SELECT company, status FROM jobs WHERE run_id='wednesday'").fetchall())
+        self.assertEqual(statuses, {"NVIDIA": "queued", "Acme": "skipped"})
 
     def test_backfill_run_scores_with_its_own_window_and_is_not_a_previous_discovery(self) -> None:
         daily = create_run(self.connection, "daily")

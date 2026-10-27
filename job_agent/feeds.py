@@ -52,9 +52,15 @@ DEFAULT_QUERIES = (
     "data scientist",
     "applied scientist",
     "ai engineer",
+    "machine learning",
+    "personalization",
+    "recommendation",
+    "research scientist",
 )
 SUPPORTED_ATS = ("greenhouse", "lever", "ashby", "workday", "amazon", "google")
 REQUEST_TIMEOUT_SECONDS = 20
+# A board whose whole fetch fails (DNS, TLS, a 5xx) is tried once more after this pause.
+RETRY_DELAY_SECONDS = 3
 USER_AGENT = "Mozilla/5.0 (compatible; job-application-agent/0.1)"
 MAX_DESCRIPTION_CHARS = 6000
 MAX_WORKERS = 12
@@ -345,6 +351,7 @@ class BoardResult:
         self.errors: list[str] = []
         self.skipped = {"title": 0, "stale": 0, "location": 0, "undated": 0}
         self.seconds = 0.0
+        self.retried = False
 
     def prefilter(self, config: dict[str, Any], now: datetime, title: str, posted_at: datetime | None) -> bool:
         """Count the posting and apply the filters that need no detail fetch (title, date)."""
@@ -402,6 +409,10 @@ class BoardResult:
             "errors": list(self.errors),
             "seconds": round(self.seconds, 2),
         }
+        if self.retried:
+            stats["retried"] = True
+        if "recency_hours" in self.entry:
+            stats["recency_hours"] = self.entry["recency_hours"]
         return stats
 
 
@@ -869,13 +880,19 @@ def fetch_board(
     fetch_text: FetchText = fetch_html,
 ) -> BoardResult:
     started = time.monotonic()
-    try:
-        result = FETCHERS[entry["ats"]](
-            entry, config, now, fetch, queries=queries, max_pages=max_pages, zone=zone, fetch_text=fetch_text
-        )
-    except Exception as exc:  # noqa: BLE001 - a failing board must not abort the run
-        result = BoardResult(entry)
-        result.errors.append(f"{type(exc).__name__}: {exc}")
+    for attempt in range(2):
+        try:
+            result = FETCHERS[entry["ats"]](
+                entry, config, now, fetch, queries=queries, max_pages=max_pages, zone=zone, fetch_text=fetch_text
+            )
+        except Exception as exc:  # noqa: BLE001 - a failing board must not abort the run
+            result = BoardResult(entry)
+            result.errors.append(f"{type(exc).__name__}: {exc}")
+        # Retry only a board that returned nothing and erred; a failed detail fetch keeps its posting.
+        if attempt or result.fetched or not result.errors:
+            break
+        time.sleep(RETRY_DELAY_SECONDS)
+    result.retried = attempt > 0
     result.seconds = time.monotonic() - started
     return result
 
@@ -889,20 +906,30 @@ def fetch_feeds(
     now: datetime | None = None,
     fetch: Fetch | None = None,
     fetch_text: FetchText | None = None,
+    board_hours: dict[str, int] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Fetch every registry board concurrently. Returns (candidates, per-board stats)."""
+    """Fetch every registry board concurrently. Returns (candidates, per-board stats).
+
+    ``board_hours`` widens the recency window for the named companies (boards whose last fetch
+    failed, from ``board_catchup_hours``); every other board uses ``config["recency_hours"]``.
+    """
     current = now or utc_now()
     zone = ZoneInfo(config.get("timezone") or "UTC")
     query_tuple = tuple(str(query) for query in (queries or DEFAULT_QUERIES) if str(query).strip())
     fetcher = fetch or fetch_json
     if not registry:
         return [], []
+    widened = board_hours or {}
+    registry = [
+        {**entry, "recency_hours": widened[entry["company"]]} if entry["company"] in widened else entry
+        for entry in registry
+    ]
     with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(registry))) as pool:
         results = list(
             pool.map(
                 lambda entry: fetch_board(
                     entry,
-                    config,
+                    {**config, "recency_hours": entry["recency_hours"]} if "recency_hours" in entry else config,
                     now=current,
                     fetch=fetcher,
                     queries=query_tuple,
@@ -936,11 +963,19 @@ def run_fetch_feeds(
     now: datetime | None = None,
     fetch: Fetch | None = None,
     fetch_text: FetchText | None = None,
+    board_hours: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """CLI entry point: load the registry, fetch, write ``out_path``, return the stats payload."""
     registry = load_registry(registry_path)
     candidates, boards = fetch_feeds(
-        registry, config, queries=queries, max_pages=max_pages, now=now, fetch=fetch, fetch_text=fetch_text
+        registry,
+        config,
+        queries=queries,
+        max_pages=max_pages,
+        now=now,
+        fetch=fetch,
+        fetch_text=fetch_text,
+        board_hours=board_hours,
     )
     output = Path(out_path).expanduser()
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -952,5 +987,6 @@ def run_fetch_feeds(
         "fetched": sum(board["fetched"] for board in boards),
         "kept": len(candidates),
         "boards_with_errors": sum(1 for board in boards if board["errors"]),
+        "widened_boards": {board["company"]: board["recency_hours"] for board in boards if "recency_hours" in board},
         "boards": boards,
     }

@@ -118,6 +118,14 @@ class AgentInstructionTests(unittest.TestCase):
         self.assertIn("set to a marker only your tab carries: `jobtab-`", skill)
         self.assertIn("a page load or redirect resets the title", skill)
         self.assertIn("never a shorter prefix another worker's page could also match", skill)
+        self.assertIn("never close the last tab left in the Claude in Chrome tab group", pipeline)
+        self.assertIn("node scripts/wake-frozen-tabs.mjs", pipeline)
+        self.assertIn("node scripts/wake-frozen-tabs.mjs", skill)
+        self.assertIn("confirm the page is signed in before continuing", skill)
+        self.assertIn('`blocker_category: "unanswerable_required_field"`', skill)
+        self.assertIn("`unanswerable_required_field`", pipeline)
+        self.assertIn("upload the assignment's `resume_pdf_path` instead", skill)
+        self.assertIn("`resume_pdf_path: RESUME_PDF_PATH`", pipeline)
         self.assertIn("now the **fallback** attach path", claude_md)
         self.assertIn("`file_upload` first and Local Resume Companion as the fallback", claude_md)
         self.assertNotIn("one at a time", claude_md)
@@ -202,7 +210,7 @@ class AgentInstructionTests(unittest.TestCase):
         self.assertIn("never grant a consent screen", skill)
         self.assertIn("name `idmsa.apple.com` instead of calling `register`", skill)
         # JOB-27: too many tabs make agent-vault time out.
-        self.assertIn("Chrome has too many tabs open", skill)
+        self.assertIn("a frozen background tab or too many open tabs", skill)
         self.assertIn("retry the same call once", skill)
         # JOB-32: committed values are read from the DOM.
         self.assertIn("Confirm the committed value from the DOM, never from a screenshot alone", skill)

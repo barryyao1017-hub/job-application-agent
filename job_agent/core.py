@@ -123,6 +123,11 @@ def load_config(path: Path | str = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
     resume_path = Path(config["approved_resume_path"]).expanduser()
     if not resume_path.is_file():
         raise ValueError(f"Approved resume does not exist: {resume_path}")
+    # Optional: a PDF of the approved résumé, for upload fields that accept only PDF.
+    if config.get("approved_resume_pdf_path"):
+        pdf_path = Path(config["approved_resume_pdf_path"]).expanduser()
+        if pdf_path.suffix.lower() != ".pdf" or not pdf_path.is_file():
+            raise ValueError(f"approved_resume_pdf_path must be an existing PDF: {pdf_path}")
     policies_path = Path(
         config.get("company_policies_path", DEFAULT_COMPANY_POLICIES_PATH)
     ).expanduser()
@@ -799,6 +804,44 @@ def recency_window_hours(connection: sqlite3.Connection, config: dict[str, Any],
     return max(base, min(MAX_RECENCY_WINDOW_HOURS, gap_hours + 2))
 
 
+MAX_BOARD_CATCHUP_HOURS = 7 * 24
+
+
+def board_catchup_hours(connection: sqlite3.Connection, config: dict[str, Any], before: datetime) -> dict[str, int]:
+    """Wider windows for boards whose latest fetch before ``before`` failed outright.
+
+    Such a board (no postings and an error: DNS, TLS, a 5xx) missed the postings of that run's
+    window, so its next fetch reaches back to its last good fetch plus 2h, capped at a week.
+    Companies whose latest fetch worked, or that never had a good one (a new registry line),
+    use the run's window and are left out.
+    """
+    base = recency_window_hours(connection, config, before)
+    rows = connection.execute(
+        """
+        SELECT run_boards.company, run_boards.fetched, run_boards.errors, runs.started_at
+        FROM run_boards JOIN runs ON runs.id = run_boards.run_id
+        WHERE runs.started_at < ? ORDER BY runs.started_at
+        """,
+        (iso_utc(before),),
+    ).fetchall()
+    latest_failed: dict[str, bool] = {}
+    last_good: dict[str, datetime] = {}
+    for row in rows:
+        failed = not row["fetched"] and bool(json.loads(row["errors"] or "[]"))
+        latest_failed[row["company"]] = failed
+        if not failed:
+            last_good[row["company"]] = parse_datetime(row["started_at"])
+    windows: dict[str, int] = {}
+    for company, failed in latest_failed.items():
+        good = last_good.get(company)
+        if not failed or good is None:
+            continue
+        hours = min(MAX_BOARD_CATCHUP_HOURS, int((before - good).total_seconds() // 3600) + 3)
+        if hours > base:
+            windows[company] = hours
+    return windows
+
+
 def ingest_candidates(
     connection: sqlite3.Connection,
     candidates: Iterable[dict[str, Any]],
@@ -1233,7 +1276,8 @@ def score_jobs(
     manual_review: dict[str, dict[str, Any]] = {}
     # Without an explicit ``now``, a job's age is measured when its run discovered it, against the
     # window that discovery covered, so scoring hours later does not drop what discovery kept.
-    windows: dict[str, tuple[dict[str, Any], datetime | None]] = {}
+    # A board whose previous fetch failed was searched with a wider window (board_catchup_hours).
+    windows: dict[str, tuple[dict[str, Any], datetime | None, dict[str, int]]] = {}
     for row in rows:
         candidate = dict(row)
         if now is None and row["run_id"] not in windows:
@@ -1241,11 +1285,13 @@ def score_jobs(
                 "SELECT started_at, recency_override_hours FROM runs WHERE id=?", (row["run_id"],)
             ).fetchone()
             started = parse_datetime(run["started_at"]) if run else None
-            hours = (run["recency_override_hours"] if run else None) or (
-                recency_window_hours(connection, config, started) if started else None
-            )
-            windows[row["run_id"]] = ({**config, "recency_hours": hours} if hours else config, started)
-        run_config, reference = windows.get(row["run_id"], (config, now))
+            override = run["recency_override_hours"] if run else None
+            hours = override or (recency_window_hours(connection, config, started) if started else None)
+            catchup = board_catchup_hours(connection, config, started) if started and not override else {}
+            windows[row["run_id"]] = ({**config, "recency_hours": hours} if hours else config, started, catchup)
+        run_config, reference, catchup = windows.get(row["run_id"], (config, now, {}))
+        if row["company"] in catchup:
+            run_config = {**run_config, "recency_hours": catchup[row["company"]]}
         result = score_candidate(candidate, run_config, now=reference)
         if result.skip_reason:
             connection.execute(
