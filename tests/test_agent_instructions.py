@@ -195,6 +195,9 @@ class AgentInstructionTests(unittest.TestCase):
             self.assertIn(area, scorer)
         self.assertIn("Start at 10", scorer)
         self.assertIn("A résumé gap never\ntakes a role below 10", scorer)
+        self.assertIn("## Hard minimums", scorer)
+        self.assertIn("at every\ncompany. A hard minimum the résumé does not show caps `skill_score` at 9", scorer)
+        self.assertIn("The ledger holds every job scored below 10", scorer)
         self.assertIn("keep résumé details and personal\nfacts out of it", scorer)
 
         pipeline = PIPELINE_SKILL.read_text(encoding="utf-8")

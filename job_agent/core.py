@@ -113,6 +113,9 @@ def load_config(path: Path | str = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
     if not isinstance(config["submit_applications"], bool):
         raise ValueError("submit_applications must be true or false")
     config.setdefault("limited_company_minimum_fit_score", 90)
+    # A job-fit-scorer skill score below this means none of the core work areas is a real part
+    # of the role (or a hard minimum is unmet), so the job is held however high its fit.
+    config.setdefault("minimum_skill_score", 10)
     # Jobs scoring above this (and every job at a company whose policy sets
     # tailor_resume) are applied to with a résumé tailored to the posting.
     config.setdefault("tailored_resume_above_fit_score", 90)
@@ -1347,11 +1350,17 @@ def score_jobs(
         queue_params.append(run_id)
     selected = connection.execute(
         f"""
-        SELECT id, company, fit_score FROM jobs WHERE {queue_where}
+        SELECT id, company, fit_score, skill_score FROM jobs WHERE {queue_where}
         ORDER BY fit_score DESC, COALESCE(posted_at, discovered_at) DESC
         """,
         queue_params,
     ).fetchall()
+    # A keyword-fallback job has no skill_score and is not held for it.
+    minimum_skill = int(config.get("minimum_skill_score", 10))
+    low_skill = [
+        row["id"] for row in selected if row["skill_score"] is not None and row["skill_score"] < minimum_skill
+    ]
+    selected = [row for row in selected if row["id"] not in set(low_skill)]
     limited = limited_company_keys(connection, policies)
     queued = [
         row["id"]
@@ -1372,6 +1381,8 @@ def score_jobs(
         "queued": queued,
         # Scored above minimum_fit_score but below the higher bar for companies with an application limit.
         "held_below_limited_threshold": held,
+        # Fit high enough, but job-fit-scorer's skill_score is below minimum_skill_score.
+        "held_low_skill": low_skill,
     }
 
 
