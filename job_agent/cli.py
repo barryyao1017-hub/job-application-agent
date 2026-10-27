@@ -14,6 +14,7 @@ from .core import (
     APPLICATION_LIMIT_CATEGORY,
     active_limits,
     block_job,
+    board_catchup_hours,
     claim_next,
     clear_limits,
     complete_job,
@@ -227,13 +228,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "fetch-feeds":
             if args.recency_hours is not None and args.recency_hours < 1:
                 raise ValueError("--recency-hours must be positive")
-            window = args.recency_hours or recency_window_hours(connection, config, utc_now())
+            started = utc_now()
+            window = args.recency_hours or recency_window_hours(connection, config, started)
             result = run_fetch_feeds(
                 {**config, "recency_hours": window},
                 registry_path=args.registry,
                 out_path=args.out,
                 queries=args.queries,
                 max_pages=args.max_pages,
+                board_hours=None if args.recency_hours else board_catchup_hours(connection, config, started),
             )
             run_id = create_run(connection, args.run_id, recency_override_hours=args.recency_hours)
             summary = record_discovery(connection, run_id, result["boards"])
@@ -295,6 +298,13 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 claimed["tailored_resume_missing"] = not claimed["resume_tailored"] and needs_tailored_resume(
                     claimed, config, policies
+                )
+                # For an upload field that accepts only PDF: the tailored PDF, else the approved PDF if any.
+                pdf = config.get("approved_resume_pdf_path")
+                claimed["resume_pdf_path"] = (
+                    claimed["resume_path"]
+                    if claimed["resume_path"].lower().endswith(".pdf")
+                    else str(Path(pdf).expanduser()) if pdf else None
                 )
             emit(claimed)
         elif args.command == "complete":

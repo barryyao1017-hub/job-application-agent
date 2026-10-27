@@ -1,5 +1,6 @@
 {
   "approved_resume_path": "/Users/you/code/job-application-agent/data/Jiayi_Yao_resume.docx",
+  "approved_resume_pdf_path": "",
   "notification_email": "you@example.com",
   "timezone": "America/Los_Angeles",
   "daily_start_time": "07:00",

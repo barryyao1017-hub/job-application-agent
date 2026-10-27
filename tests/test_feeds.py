@@ -376,7 +376,8 @@ class FeedRunTests(unittest.TestCase):
         routes["https://api.lever.co/v0/postings/acme"] = OSError("connection refused")
         fetch = FakeFetch(routes)
 
-        candidates, stats = fetch_feeds([GREENHOUSE, LEVER, ASHBY, WORKDAY, AMAZON], CONFIG, now=NOW, fetch=fetch)
+        with mock.patch("job_agent.feeds.RETRY_DELAY_SECONDS", 0):
+            candidates, stats = fetch_feeds([GREENHOUSE, LEVER, ASHBY, WORKDAY, AMAZON], CONFIG, now=NOW, fetch=fetch)
 
         by_company = {entry["company"]: entry for entry in stats}
         self.assertEqual(by_company["Acme Lever"]["errors"], ["OSError: connection refused"])
@@ -388,6 +389,42 @@ class FeedRunTests(unittest.TestCase):
         self.assertEqual(candidates, sorted(candidates, key=lambda c: c["posted_at"], reverse=True))
         for entry in stats:
             self.assertIn("seconds", entry)
+
+    def test_a_failed_board_is_retried_once(self) -> None:
+        class FlakyFetch(FakeFetch):
+            failures = 1
+
+            def __call__(self, url, payload=None):
+                if self.failures:
+                    self.failures -= 1
+                    self.calls.append((url, payload))
+                    raise OSError("nodename nor servname provided")
+                return super().__call__(url, payload)
+
+        with mock.patch("job_agent.feeds.RETRY_DELAY_SECONDS", 0):
+            candidates, stats = fetch_feeds([GREENHOUSE], CONFIG, now=NOW, fetch=FlakyFetch(standard_routes()))
+            self.assertEqual(len(candidates), 1)
+            self.assertEqual(stats[0]["errors"], [])
+            self.assertTrue(stats[0]["retried"])
+
+            routes = standard_routes()
+            routes["https://api.lever.co/v0/postings/acme"] = OSError("connection refused")
+            fetch = FakeFetch(routes)
+            _, stats = fetch_feeds([LEVER], CONFIG, now=NOW, fetch=fetch)
+            self.assertEqual(fetch.urls(), ["https://api.lever.co/v0/postings/acme?mode=json"] * 2, "one retry, no more")
+            self.assertEqual(stats[0]["errors"], ["OSError: connection refused"])
+
+    def test_board_hours_widen_only_the_named_board(self) -> None:
+        narrow = {**CONFIG, "recency_hours": 2}
+        fetch = FakeFetch(standard_routes())
+        candidates, stats = fetch_feeds(
+            [GREENHOUSE, ASHBY], narrow, now=NOW, fetch=fetch, board_hours={"Acme": 6}
+        )
+        by_company = {entry["company"]: entry for entry in stats}
+        self.assertEqual(by_company["Acme"]["kept"], 1, "the 4-hour-old posting is inside Acme's 6h window")
+        self.assertEqual(by_company["Acme"]["recency_hours"], 6)
+        self.assertNotIn("recency_hours", by_company["Acme Ashby"])
+        self.assertEqual({c["company"] for c in candidates}, {"Acme"})
 
     def test_candidates_are_deduplicated_by_url(self) -> None:
         fetch = FakeFetch(standard_routes())
