@@ -1,5 +1,6 @@
 [
   {"company": "Amazon", "ats": "amazon"},
+  {"company": "Google", "ats": "google"},
   {"company": "NVIDIA", "ats": "workday", "host": "nvidia.wd5.myworkdayjobs.com", "tenant": "nvidia", "site": "NVIDIAExternalCareerSite"},
   {"company": "Broadcom", "ats": "workday", "host": "broadcom.wd1.myworkdayjobs.com", "tenant": "broadcom", "site": "External_Career"},
   {"company": "Intel", "ats": "workday", "host": "intel.wd1.myworkdayjobs.com", "tenant": "intel", "site": "External"},

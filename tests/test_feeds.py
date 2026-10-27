@@ -18,7 +18,9 @@ from job_agent.feeds import (
     DEFAULT_QUERIES,
     SUPPORTED_ATS,
     amazon_posted_at,
+    GOOGLE_QUERIES,
     fetch_feeds,
+    google_slug,
     greenhouse_location_metadata,
     load_registry,
     run_fetch_feeds,
@@ -306,6 +308,47 @@ class FeedParserTests(unittest.TestCase):
         self.assertEqual({p["sort"][0] for p in params}, {"recent"})
         self.assertEqual({p["loc_query"][0] for p in params}, {"USA"})
         self.assertEqual({p["offset"][0] for p in params}, {"0"}, "a short page ends the walk")
+
+    def test_google_board(self) -> None:
+        pages: list[str] = []
+
+        def fetch_text(url: str) -> str:
+            pages.append(url)
+            return (FIXTURES / "google-results.html").read_text(encoding="utf-8")
+
+        candidates, stats = fetch_feeds(
+            [{"company": "Google", "ats": "google", "queries": ["ranking"]}],
+            CONFIG,
+            now=NOW,
+            fetch=FakeFetch({}),
+            fetch_text=fetch_text,
+        )
+
+        self.assertEqual(len(candidates), 1)
+        job = candidates[0]
+        self.assert_discovered_shape(job)
+        self.assertEqual(job["ats"], "google")
+        self.assertEqual(job["ats_job_id"], "111111111111111111")
+        self.assertEqual(
+            job["source_url"],
+            "https://www.google.com/about/careers/applications/jobs/results/111111111111111111-software-engineer-iii-aiml-search-ranking",
+        )
+        self.assertEqual(job["location"], "Mountain View, CA, USA")
+        self.assertEqual(job["posted_at"], "2026-07-30T10:00:00+00:00")
+        self.assertNotIn("posted_at_precision", job)
+        self.assertTrue(job["description"].startswith("Minimum qualifications:"), "qualifications come first")
+        self.assertIn("Responsibilities:\nBuild ranking models for Search.", job["description"])
+        self.assertEqual(stats[0]["skipped"], {"title": 1, "stale": 1, "location": 1, "undated": 0})
+        self.assertEqual(len(pages), 1, "the page holds the search's whole total")
+        query = parse_qs(urlsplit(pages[0]).query)
+        self.assertEqual(query["q"], ["ranking"])
+        self.assertEqual(query["sort_by"], ["date"])
+        self.assertIn("Mountain View, CA, USA", query["location"])
+
+    def test_google_slug_matches_the_careers_site(self) -> None:
+        self.assertEqual(google_slug("Software Engineer III, AI/ML, Search Ads"), "software-engineer-iii-aiml-search-ads")
+        self.assertEqual(google_slug("Research Scientist, Gemini Post-Training"), "research-scientist-gemini-posttraining")
+        self.assertIn('"Software Engineer III" recommendations', GOOGLE_QUERIES)
 
     def test_workday_posted_at_mapping(self) -> None:
         self.assertEqual(workday_posted_at("Posted Today", NOW, ZONE), NOW)

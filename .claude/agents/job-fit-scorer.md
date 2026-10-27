@@ -45,3 +45,20 @@ takes a role below 10 when one of the areas is a real part of its work.
 `skill_rationale` names the areas and the main tools from the post that drove
 the score. It is stored in the ledger, so keep résumé details and personal
 facts out of it.
+
+## Google roles
+
+Google applications are capped at three per 30 days, so score them strictly
+(only fit 90 and up is applied to, which needs a skill score of about 15 or
+more). Read the post's "Minimum qualifications" first:
+
+- A hard minimum the résumé does not show, such as production C++, Java or Go,
+  or accelerator hardware, caps `skill_score` at 9, whatever else matches.
+  Python and SQL do not satisfy a C++, Java or Go minimum.
+- Otherwise rank by how close the team's domain is to search ranking,
+  retrieval and recommendations (closest scores highest), then by the
+  preferred qualifications the résumé meets.
+- The target level is L4 (Software Engineer III, or untitled roles Google tags
+  Mid). Set `minimum_years` from the minimum qualifications.
+
+Name the unmet minimum, if any, in `skill_rationale`.

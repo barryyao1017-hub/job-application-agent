@@ -19,6 +19,8 @@ For every match:
 
 `application_limit` means the company's site caps how many applications one account may send. The ledger queues and claims that company's jobs only at fit at or above `limited_company_minimum_fit_score` (config, default 90), so the cap goes to the best fits. A `max_submissions` within `window_days` is enforced from the ledger's own submissions; any other cap takes effect when a worker reports it (`block --category application_limit`), after which `claim` skips the company and its jobs stay queued until the limit expires or `clear-limit` lifts it. A company without a policy that reports a cap gets the same treatment.
 
+`tailor_resume: true` means every job at the company is applied to with a résumé tailored to its posting (the pipeline's tailoring step), not only those above `tailored_resume_above_fit_score`.
+
 `swap` (needs `application_limit.max_active`) lets the orchestrator free a slot itself: withdraw the weakest active application the ledger submitted for a queued job at least `min_fit_gain` fit points better, at most `max_withdrawals_per_run` a run. The policy document holds the site's swap procedure; nothing is ever withdrawn outside it.
 
 To add a company, create one concise Markdown file in `references/` and add its exact company-name aliases, handling mode, document filename, reason, and any `application_limit` (`description`, optionally `max_submissions` and `window_days`) to `references/policies.json`.

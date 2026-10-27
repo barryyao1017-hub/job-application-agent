@@ -241,12 +241,37 @@ class AgentInstructionTests(unittest.TestCase):
     def test_ats_playbooks_exist_and_defer_to_the_skill(self) -> None:
         skill = COMPLETION_SKILL.read_text(encoding="utf-8")
         references = COMPLETION_SKILL.parent / "references"
-        for name in ("workday", "greenhouse", "ashby", "lever", "icims", "smartrecruiters", "successfactors", "amazon"):
+        for name in ("workday", "greenhouse", "ashby", "lever", "icims", "smartrecruiters", "successfactors", "amazon", "google"):
             with self.subTest(playbook=name):
                 self.assertIn(f"`{name}.md`", skill)
                 text = (references / f"{name}.md").read_text(encoding="utf-8")
                 self.assertIn("SKILL.md` is authoritative", text)
         self.assertIn("where one disagrees with this skill, this skill wins", skill)
+
+    def test_google_and_strong_fits_get_tailored_resumes(self) -> None:
+        import json
+
+        pipeline = PIPELINE_SKILL.read_text(encoding="utf-8")
+        self.assertIn("python3 -m job_agent tailor-queue --out-dir", pipeline)
+        self.assertIn('`subagent_type: "resume-tailor"`', pipeline)
+        self.assertIn("a fit of exactly 90 does not count", pipeline)
+        self.assertIn("Google applies like any other company (no separate approval)", pipeline)
+        self.assertIn("Attach the résumé at `resume_path: RESUME_PATH`", pipeline)
+        self.assertIn("SendUserFile", pipeline)
+        tailor = (ROOT / ".claude" / "agents" / "resume-tailor.md").read_text(encoding="utf-8")
+        self.assertIn("name: resume-tailor\n", tailor)
+        self.assertIn("Same facts only.", tailor)
+        self.assertIn("Never claim production C++", tailor)
+        self.assertIn("python3 -m job_agent render-resume", tailor)
+        skill = COMPLETION_SKILL.read_text(encoding="utf-8")
+        self.assertIn("The assignment's `resume_path` names the file", skill)
+        self.assertIn("caps `skill_score` at 9", FIT_SCORER.read_text(encoding="utf-8"))
+        google = json.loads((POLICIES_SKILL / "references" / "policies.json").read_text(encoding="utf-8"))["policies"][0]
+        self.assertEqual((google["id"], google["handling"], google["tailor_resume"]), ("google", "auto_apply", True))
+        self.assertEqual(
+            (google["application_limit"]["max_submissions"], google["application_limit"]["window_days"]), (3, 30)
+        )
+        self.assertIn("record-applied", (POLICIES_SKILL / "references" / "google.md").read_text(encoding="utf-8"))
 
     def test_policy_registry_documents_exist(self) -> None:
         import json

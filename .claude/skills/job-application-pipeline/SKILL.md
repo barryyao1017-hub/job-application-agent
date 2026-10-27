@@ -5,7 +5,7 @@ description: "Orchestrate the local daily job-search pilot: discover recent ML/D
 
 # Daily Job Application Pipeline
 
-Run from the repository root. Invoking this skill, including from the scheduled daily run, is the user's authorization to transmit `application-profile.md` facts and `Jiayi_Yao_resume.docx` to the application sites processed in the run and, while `submit_applications` is `true` in `config.json`, to submit those applications. Treat `config.json`, `application-profile.md`, the approved résumé, the SQLite ledger, and discovery data as private local data.
+Run from the repository root. Invoking this skill, including from the scheduled daily run, is the user's authorization to transmit `application-profile.md` facts, `Jiayi_Yao_resume.docx`, and the résumé PDFs this run tailors from it to the application sites processed in the run and, while `submit_applications` is `true` in `config.json`, to submit those applications. Treat `config.json`, `application-profile.md`, the approved résumé, the SQLite ledger, and discovery data as private local data.
 
 ## Non-negotiable boundaries
 
@@ -13,7 +13,7 @@ Run from the repository root. Invoking this skill, including from the scheduled 
 - Never interpret profile information, answer application questions, operate application forms, attach a résumé, or decide whether a form question is answerable.
 - Use the Agent tool with `subagent_type: "application-worker"` to start one fresh worker for each claimed job and let it handle exactly that job. Run up to `max_parallel_workers` of them at once (see "Application-worker concurrency").
 - In the worker's initial prompt, require it to fully read and follow the repository-local `application-completion` skill at `.claude/skills/application-completion/SKILL.md`, including its required `application-profile.md`. Treat that skill as authoritative for profile use, form behavior, authentication, completion, blocking, tab preservation, and output.
-- Pass the worker only job-routing information: job ID, company, role, and application URL. Do not summarize or reinterpret the profile, suggest answers, or add job-specific form-filling guidance.
+- Pass the worker only job-routing information: job ID, company, role, application URL, and the claim's `resume_path`. Do not summarize or reinterpret the profile, suggest answers, or add job-specific form-filling guidance.
 - Submission is the worker's job, never the orchestrator's. `claim` returns `submit: true` only while `config.json` has `submit_applications: true`; pass that value to the worker unchanged. With `submit: false`, workers stop at Review.
 - Never assign a job with `manual_review` status to an application worker.
 - Never override or extend a worker's authentication procedure. Record an authentication blocker, preserve its live tab, and continue the queue.
@@ -38,7 +38,7 @@ Discovery is a ledger command, not a browser task. Run:
 python3 -m job_agent fetch-feeds --registry data/company-registry.json --out artifacts/YYYY-MM-DD/discovered.json
 ```
 
-It pulls the Greenhouse, Lever, Ashby, Workday and Amazon job boards listed in `data/company-registry.json` (private, gitignored; template `company-registry.example.json` at the repo root), keeps ML/Data individual-contributor postings from the past `recency_hours` whose location is preferred or US-remote, and writes the discovery array. Each item has this shape:
+It pulls the Greenhouse, Lever, Ashby, Workday, Amazon and Google Careers job boards listed in `data/company-registry.json` (private, gitignored; template `company-registry.example.json` at the repo root), keeps ML/Data individual-contributor postings from the past `recency_hours` whose location is preferred or US-remote, and writes the discovery array. Each item has this shape:
 
 ```json
 {
@@ -87,20 +87,31 @@ python3 -m job_agent score --run-id RUN_ID
 
 Pass the `RUN_ID` from `fetch-feeds` to `discover`, so the jobs and the discovery stats share one run. If discovery failed and there is no `RUN_ID` yet, omit `--run-id` and use the one `discover` returns. The CLI performs hard filters, scoring, deduplication, company-policy routing, and queues every eligible candidate scoring at least `minimum_fit_score`; there is no daily cap. A company with an application limit (an `application_limit` in its policy, or a cap a site has reported) needs at least `limited_company_minimum_fit_score` (default 90), so its few applications go to the best fits; `score` lists the jobs it held back as `held_below_limited_threshold`. A `manual_review` result is deliberately excluded from the application queue.
 
+### 3b. Tailor résumés
+
+Every queued job that scores above `tailored_resume_above_fit_score` (config, default 90; a fit of exactly 90 does not count), and every job at a company whose policy sets `tailor_resume` (Google), is applied to with a résumé tailored to its posting, plus a screenshot of that résumé beside the job description. Do this after scoring and before the first claim:
+
+1. Export the base résumé and the other true versions from the résumé doc with the docs connector (load the `anthropic-skills:docs` skill and its `export` tool with ToolSearch first): `export` with `container` `{"kind":"project","id":"<resume_doc.doc_id>"}`, `format: "markdown"`, and `file` set to `resume_doc.base_tab`, then each of `resume_doc.bank_tabs` (all in `config.json`). Write each result's `data.bytes_b64` string to a file with the Write tool and decode it with `python3 -m job_agent save-export --in FILE --out artifacts/YYYY-MM-DD/resumes/base.md data/resume-base.md` (the bank tabs to `bank-1.md`, `bank-2.md`, … beside it, plus `data/resume-bank-1.md`, … ). If the export fails or the docs connector is unavailable (headless runs), use the copies the last export left in `data/` (`resume-base.md`, `resume-bank-*.md`) and say so in the report. With neither, skip tailoring; those jobs go out with the approved résumé, and the report lists them.
+2. Run `python3 -m job_agent tailor-queue --out-dir artifacts/YYYY-MM-DD/resumes`. It lists each job that needs a tailored résumé, best fit first, with its `posting_path` and `out_dir`.
+3. Start `resume-tailor` agents (Agent tool, `subagent_type: "resume-tailor"`), up to three at a time, one per job, sending each batch's calls in one message. Give each the job id, `posting_path`, `out_dir`, and the paths of `base.md` and the `bank-*.md` files. Each writes the tailored Markdown, runs `render-resume` (one-page PDF and `Resume_vs_JD.png`, both recorded on the job) and returns a JSON result.
+4. A `failed` result leaves that job on the approved résumé; note the error in the report. Do not retry it in this run.
+
+`claim` then returns each job's `resume_path` (its tailored PDF, or the approved résumé) and `resume_tailored`; `tailored_resume_missing: true` means the job should have had one, so put it in the report. Tailored résumés never go in the summary email; the comparison screenshots are listed in the final report and sent to the user (below).
+
 ### 4. Delegate applications to parallel workers
 
 After each non-null claim, start a fresh `application-worker` with that job's routing information. Its prompt must say:
 
-> Fully read and follow the repository-local `application-completion` skill at `.claude/skills/application-completion/SKILL.md`, including its required `application-profile.md`. Process exactly this application without spawning other agents. `submit: SUBMIT` — with `true`, submit it after the final pre-submit checks pass and confirm receipt as the skill's submit-and-confirm section describes; with `false`, stop at final pre-submit review. Preserve the supplied `job_id` and return exactly the skill's JSON result.
+> Fully read and follow the repository-local `application-completion` skill at `.claude/skills/application-completion/SKILL.md`, including its required `application-profile.md`. Process exactly this application without spawning other agents. Attach the résumé at `resume_path: RESUME_PATH`. `submit: SUBMIT` — with `true`, submit it after the final pre-submit checks pass and confirm receipt as the skill's submit-and-confirm section describes; with `false`, stop at final pre-submit review. Preserve the supplied `job_id` and return exactly the skill's JSON result.
 
-Replace `SUBMIT` with the claim's `submit` value.
+Replace `SUBMIT` with the claim's `submit` value. Replace `RESUME_PATH` with the claim's `resume_path`.
 
 Then process the queue with up to `SLOTS` workers at a time, where `SLOTS` is `max_parallel_workers` from `config.json` (default 2, at most 3). Slot `N` uses worker id `daily-browser-worker-N` for its claims and for recording its results.
 
 1. Before each claim, keep the agent's Chrome small: count its page tabs with `curl -s localhost:9222/json/list` (entries with `"type": "page"`). If there are more than 12, close the extras with `curl -s localhost:9222/json/close/TAB_ID`: first discovery, check, verification-email, confirmation, and duplicate tabs, then the oldest ready or blocked application tabs beyond the five most recent. Never close a running worker's tab. With too many tabs open, agent-vault's browser connection times out (2026-10-18).
    For each free slot, run `python3 -m job_agent claim --worker-id daily-browser-worker-N --run-id RUN_ID`. Each claim is logged as one application attempt for this run. `claim` never hands out a job from a company that already has a claimed job, so parallel workers never sign in to or create the same company's account at once.
 2. If a claim returns `null`, leave that slot empty. When every slot is empty, stop application work. A `null` can also mean the remaining queued jobs belong to companies in progress, so claim again for empty slots each time a worker finishes.
-3. For each non-null claim, start a fresh worker with the required prompt and pass only the job ID, company, role, application URL, and the claim's `submit` value. Pass the URL, never an already opened tab: each worker opens and owns its own tab. Start the workers for all newly filled slots in one message, one Agent call each, so they run at the same time.
+3. For each non-null claim, start a fresh worker with the required prompt and pass only the job ID, company, role, application URL, the claim's `resume_path`, and its `submit` value. Pass the URL, never an already opened tab: each worker opens and owns its own tab. Start the workers for all newly filled slots in one message, one Agent call each, so they run at the same time.
 4. When a worker finishes, handle its result (steps 5–7), then claim for its slot again (step 1) and start the next worker, so at most `SLOTS` run at once. Do not stop a form worker merely because it is slow; stopping it can release or close its controlled tab. Do not touch a running worker's tab.
 5. Require the worker to return one JSON object:
 
@@ -155,6 +166,10 @@ Use the worker id of the slot that claimed the job. Reject malformed worker outp
 
 Before the first claim, for each company whose policy has a `swap` (`company-policies --company NAME` shows it; today only Amazon) and that has queued jobs, follow the "Swap procedure" in that company's policy document (`references/amazon.md` in `company-application-policies`). It reads the site's active applications, runs `python3 -m job_agent swap-plan`, and either clears a cap that rejections have already freed or withdraws one weaker application with `python3 -m job_agent withdraw` so the stronger queued job can be claimed. Withdraw only what `swap-plan` pairs, one pair at a time, and only after the previous replacement was submitted. Put every withdrawal and its replacement in the run summary; the digest lists them.
 
+### Google applications
+
+Google applies like any other company (no separate approval), within the user's limit of three Google applications per rolling 30 days, which the ledger enforces from its submissions. The user also applies by hand, so before the first claim of a run with queued Google jobs, follow the dashboard check in the Google policy document (`references/google.md` in `company-application-policies`): read the Google Careers applications dashboard in the agent's Chrome and record each submitted application from the last 30 days that the ledger lacks with `python3 -m job_agent record-applied`. `python3 -m job_agent limits` then shows whether Google is deferred and until when; put that date in the summary.
+
 ### Application-worker concurrency
 
 Application workers share one Chrome but nothing else they could clobber:
@@ -201,4 +216,4 @@ Do not send or track per-job emails. At the end:
 
 ## Required final report
 
-Report companies checked, postings scanned, discovered, deduplicated, skipped, manual-attention, submitted, ready, blocked, and remaining queued counts, plus the submission rate (submitted attempts / application attempts) for this run and all time. List each manual-attention, submitted, ready, or blocked company and role; include the applicable company-policy document, the confirmation evidence for submissions, or the blocker and its root cause. List the companies under an application limit with the jobs they defer, the to-dos filed (by ID), and the recruiter, interview, and rejection emails found. If `submit` was `false`, state that nothing was submitted.
+Report companies checked, postings scanned, discovered, deduplicated, skipped, manual-attention, submitted, ready, blocked, and remaining queued counts, plus the submission rate (submitted attempts / application attempts) for this run and all time. List each manual-attention, submitted, ready, or blocked company and role; include the applicable company-policy document, the confirmation evidence for submissions, or the blocker and its root cause. List the companies under an application limit with the jobs they defer, the to-dos filed (by ID), and the recruiter, interview, and rejection emails found. For every job applied to with a tailored résumé, give the tailor's one-line `changes` and the paths of its PDF and `Resume_vs_JD.png`, and list the jobs that should have had one but went out with the approved résumé. Send each comparison screenshot to the user with SendUserFile (status `proactive`) when that tool is available. If `submit` was `false`, state that nothing was submitted.

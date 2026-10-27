@@ -7,12 +7,15 @@
         "Google LLC",
         "Google DeepMind"
       ],
-      "handling": "manual_review",
+      "handling": "auto_apply",
       "documentation": "google.md",
-      "reason": "Preserve the user's limited rolling application allowance for carefully selected roles.",
+      "reason": "The user allows three Google applications in a rolling 30 days; spend them on the best fits, each with a résumé tailored to the posting.",
       "application_limit": {
-        "description": "The user allows at most three Google applications in a rolling 30-day window."
-      }
+        "description": "The user allows at most three Google applications in a rolling 30-day window (Google also refuses re-applying to one job within 90 days).",
+        "max_submissions": 3,
+        "window_days": 30
+      },
+      "tailor_resume": true
     },
     {
       "id": "amazon",
