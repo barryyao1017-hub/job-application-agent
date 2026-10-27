@@ -24,9 +24,14 @@
       ],
       "handling": "auto_apply",
       "documentation": "amazon.md",
-      "reason": "amazon.jobs allows ten active applications per account; spend them on the best fits.",
+      "reason": "amazon.jobs allows ten active applications per account; spend them on the best fits and swap out weaker ones.",
       "application_limit": {
-        "description": "amazon.jobs refuses new applications while the account has ten active ones."
+        "description": "amazon.jobs refuses new applications while the account has ten active ones.",
+        "max_active": 10
+      },
+      "swap": {
+        "min_fit_gain": 10,
+        "max_withdrawals_per_run": 2
       }
     },
     {

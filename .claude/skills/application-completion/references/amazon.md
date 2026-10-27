@@ -25,7 +25,7 @@ Reference notes for the application worker. `.claude/skills/application-completi
 
 ## Limits and known failures
 
-- **Account cap of 10 active applications.** Clicking Apply redirects to `summary?result=application_limit_reach`, which reads "You've reached the maximum number of job applications ... limit of 10 job applications." Return blocked `application_limit` and quote that text. The ledger then stops claiming Amazon jobs and keeps them queued; only the user can lift the cap, by withdrawing older applications (2026-10-23). Amazon jobs are queued only at fit 90 or above, to spend the ten slots well.
+- **Account cap of 10 active applications.** Clicking Apply redirects to `summary?result=application_limit_reach`, which reads "You've reached the maximum number of job applications ... limit of 10 job applications." Return blocked `application_limit` and quote that text. The ledger then stops claiming Amazon jobs and keeps them queued. The orchestrator lifts the cap itself: rejections free slots, and the swap procedure in the company policy withdraws weaker applications (2026-10-27). Workers never withdraw anything. Amazon jobs are queued only at fit 90 or above, to spend the ten slots well.
 - **Identity verification.** Two applications asked for a government ID photo and a live selfie before the EEO and Review steps (2026-10-17, 2026-10-18). Leave the auto-saved progress and block `identity_verification_required`; never upload ID images. This step did not appear on any Amazon submission from 2026-10-20 on, and the repo does not record why.
 
 ## Confirmation

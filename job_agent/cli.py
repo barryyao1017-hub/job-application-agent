@@ -22,6 +22,7 @@ from .core import (
     digest_payload,
     finish_run,
     ingest_candidates,
+    latest_running_run,
     load_company_policies,
     load_config,
     mark_notification,
@@ -33,6 +34,8 @@ from .core import (
     resume_text,
     score_jobs,
     submit_job,
+    swap_plan,
+    withdraw_job,
 )
 from .feeds import DEFAULT_QUERIES, DEFAULT_REGISTRY_PATH, run_fetch_feeds
 
@@ -136,6 +139,25 @@ def build_parser() -> argparse.ArgumentParser:
         "clear-limit", help="Lift a reported application cap, e.g. after withdrawing applications"
     )
     clear_limit.add_argument("--company", required=True)
+
+    plan = subparsers.add_parser(
+        "swap-plan", help="Active applications to withdraw for stronger queued jobs (companies with a swap policy)"
+    )
+    plan.add_argument("--company", required=True)
+    plan.add_argument(
+        "--active-file",
+        type=Path,
+        required=True,
+        help="JSON array of the site's active applications: {ats_job_id, status}",
+    )
+    plan.add_argument("--keep", nargs="*", default=[], help="ATS job ids never to withdraw (recruiter contact)")
+    plan.add_argument("--run-id", help="Run the withdrawals count toward (default: latest running run)")
+
+    withdraw = subparsers.add_parser("withdraw", help="Record an application withdrawn on the site for a swap")
+    withdraw.add_argument("--job-id", required=True)
+    withdraw.add_argument("--replacement-job-id", required=True)
+    withdraw.add_argument("--evidence", required=True)
+    withdraw.add_argument("--run-id", help="Run the withdrawal counts toward (default: latest running run)")
 
     digest = subparsers.add_parser("digest")
     digest.add_argument("--run-id", required=True)
@@ -266,6 +288,32 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "clear-limit":
             policies = load_company_policies(config["company_policies_path"])
             emit({"company": args.company, "cleared": clear_limits(connection, args.company, policies)})
+        elif args.command == "swap-plan":
+            active = json.loads(args.active_file.read_text(encoding="utf-8"))
+            if not isinstance(active, list) or not all(isinstance(item, dict) and item.get("ats_job_id") for item in active):
+                raise ValueError("Active applications must be a JSON array of objects with ats_job_id")
+            emit(
+                swap_plan(
+                    connection,
+                    args.company,
+                    active,
+                    load_company_policies(config["company_policies_path"]),
+                    run_id=args.run_id or latest_running_run(connection),
+                    keep=args.keep,
+                )
+            )
+        elif args.command == "withdraw":
+            emit(
+                withdraw_job(
+                    connection,
+                    args.job_id,
+                    replacement_job_id=args.replacement_job_id,
+                    evidence=args.evidence,
+                    policies=load_company_policies(config["company_policies_path"]),
+                    run_id=args.run_id or latest_running_run(connection),
+                    submit_applications=config["submit_applications"],
+                )
+            )
         elif args.command == "digest":
             if args.sent_key or args.failed_key:
                 key = args.sent_key or args.failed_key

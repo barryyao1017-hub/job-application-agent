@@ -177,6 +177,7 @@ def load_company_policies(path: Path | str = DEFAULT_COMPANY_POLICIES_PATH) -> l
                 "application_limit": parse_application_limit(policy_id, raw.get("application_limit")),
             }
         )
+        policies[-1]["swap"] = parse_swap(policy_id, raw.get("swap"), policies[-1]["application_limit"])
     return policies
 
 
@@ -187,13 +188,14 @@ def parse_application_limit(policy_id: str, raw: Any) -> dict[str, Any] | None:
     submissions (Ashby: one per company per 90 days). Other caps, such as Amazon's
     ten active applications, are only described: the ledger cannot see them, so
     they take effect when a worker reports one (``block --category application_limit``).
+    ``max_active`` records a cap on active applications, which a ``swap`` policy needs.
     """
     if raw is None:
         return None
     if not isinstance(raw, dict) or not str(raw.get("description") or "").strip():
         raise ValueError(f"Company policy {policy_id} application_limit needs a description")
     limit: dict[str, Any] = {"description": str(raw["description"]).strip()}
-    for key in ("max_submissions", "window_days"):
+    for key in ("max_submissions", "window_days", "max_active"):
         value = raw.get(key)
         if value is None:
             continue
@@ -203,6 +205,27 @@ def parse_application_limit(policy_id: str, raw: Any) -> dict[str, Any] | None:
     if ("max_submissions" in limit) != ("window_days" in limit):
         raise ValueError(f"Company policy {policy_id} needs both max_submissions and window_days, or neither")
     return limit
+
+
+def parse_swap(policy_id: str, raw: Any, limit: dict[str, Any] | None) -> dict[str, Any] | None:
+    """A policy's ``swap``: withdraw a weaker active application to free a slot for a stronger queued one.
+
+    ``min_fit_gain`` is how much higher the queued job's fit must be than the
+    withdrawn one's; ``max_withdrawals_per_run`` bounds the damage of one run.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError(f"Company policy {policy_id} swap must be an object")
+    if not limit or "max_active" not in limit:
+        raise ValueError(f"Company policy {policy_id} swap needs application_limit.max_active")
+    swap: dict[str, Any] = {}
+    for key in ("min_fit_gain", "max_withdrawals_per_run"):
+        value = raw.get(key)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError(f"Company policy {policy_id} swap.{key} must be a positive integer")
+        swap[key] = value
+    return swap
 
 
 def match_company_policy(
@@ -567,6 +590,10 @@ CREATE TABLE IF NOT EXISTS jobs (
     company_policy_document TEXT,
     submitted_at TEXT,
     confirmation_evidence TEXT,
+    withdrawn_at TEXT,
+    withdrawal_evidence TEXT,
+    withdrawn_run_id TEXT,
+    replaced_by TEXT,
     updated_at TEXT NOT NULL
 );
 
@@ -649,6 +676,10 @@ def connect_db(path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
         ("skill_score", "INTEGER"),
         ("skill_rationale", "TEXT"),
         ("ats", "TEXT"),
+        ("withdrawn_at", "TEXT"),
+        ("withdrawal_evidence", "TEXT"),
+        ("withdrawn_run_id", "TEXT"),
+        ("replaced_by", "TEXT"),
     ):
         if name not in existing_columns:
             connection.execute(f"ALTER TABLE jobs ADD COLUMN {name} {column_type}")
@@ -884,6 +915,126 @@ def clear_limits(
     return cursor.rowcount
 
 
+SWAPPABLE_ATS_STATUS = "SUBMITTED"
+
+
+def swap_policy(company: str, policies: list[dict[str, Any]]) -> dict[str, Any]:
+    policy = match_company_policy(company, policies)
+    if not policy or not policy.get("swap"):
+        raise ValueError(f"{company} has no swap policy")
+    return policy
+
+
+def withdrawals_in_run(connection: sqlite3.Connection, run_id: str | None, policy: dict[str, Any]) -> int:
+    rows = connection.execute(
+        "SELECT company FROM jobs WHERE status='withdrawn' AND withdrawn_run_id IS ?", (run_id,)
+    ).fetchall()
+    return sum(1 for row in rows if normalize_company_name(row["company"]) in policy["normalized_company_names"])
+
+
+def swap_plan(
+    connection: sqlite3.Connection,
+    company: str,
+    active: list[dict[str, Any]],
+    policies: list[dict[str, Any]],
+    *,
+    run_id: str | None = None,
+    keep: Iterable[str] = (),
+) -> dict[str, Any]:
+    """Which active applications to withdraw for stronger queued jobs at a company with a swap policy.
+
+    ``active`` is the site's own list of active applications (``ats_job_id`` and
+    ``status``). Only applications the ledger submitted, still in the site's
+    plain submitted state and not in ``keep`` (recruiter contact) can be withdrawn;
+    the rest hold their slots. Pairs go weakest-for-strongest while the fit gain
+    is at least ``min_fit_gain``, up to the run's remaining withdrawals. When the
+    site shows a free slot there is nothing to withdraw: ``free_slots`` says so
+    and the caller clears the reported limit.
+    """
+    policy = swap_policy(company, policies)
+    full = next(p for p in policies if p["id"] == policy["id"])
+    cap = policy["application_limit"]["max_active"]
+    swap = policy["swap"]
+    aliases = full["normalized_company_names"]
+    kept = {str(job_id) for job_id in keep}
+    swappable_ids = {
+        str(item["ats_job_id"])
+        for item in active
+        if str(item.get("status") or "").upper() == SWAPPABLE_ATS_STATUS and str(item["ats_job_id"]) not in kept
+    }
+    rows = connection.execute(
+        "SELECT id, company, title, fit_score, ats_job_id, submitted_at, status FROM jobs "
+        "WHERE status IN ('submitted', 'queued') ORDER BY fit_score DESC, COALESCE(posted_at, discovered_at) DESC"
+    ).fetchall()
+    rows = [row for row in rows if normalize_company_name(row["company"]) in aliases]
+    queued = [dict(row) for row in rows if row["status"] == "queued"]
+    withdrawable = sorted(
+        (dict(row) for row in rows if row["status"] == "submitted" and str(row["ats_job_id"]) in swappable_ids),
+        key=lambda row: (row["fit_score"] or 0, row["submitted_at"] or ""),
+    )
+    remaining = max(0, swap["max_withdrawals_per_run"] - withdrawals_in_run(connection, run_id, full))
+    free_slots = max(0, cap - len(active))
+    pairs = []
+    if not free_slots:
+        for replacement, withdraw in zip(queued, withdrawable):
+            if len(pairs) >= remaining or (replacement["fit_score"] or 0) < (withdraw["fit_score"] or 0) + swap["min_fit_gain"]:
+                break
+            pairs.append({"withdraw": withdraw, "replacement": replacement})
+    return {
+        "company": company,
+        "active": len(active),
+        "max_active": cap,
+        "free_slots": free_slots,
+        "withdrawals_left_this_run": remaining,
+        "min_fit_gain": swap["min_fit_gain"],
+        "pairs": pairs,
+    }
+
+
+def withdraw_job(
+    connection: sqlite3.Connection,
+    job_id: str,
+    *,
+    replacement_job_id: str,
+    evidence: str,
+    policies: list[dict[str, Any]],
+    run_id: str | None = None,
+    submit_applications: bool,
+) -> dict[str, Any]:
+    """Record a withdrawn application and lift the company's reported cap so its replacement can be claimed."""
+    if not submit_applications:
+        raise ValueError("Withdrawal is disabled: submit_applications is not true in config")
+    if not evidence.strip():
+        raise ValueError("Withdrawal requires on-page evidence")
+    row = connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+    replacement = connection.execute("SELECT * FROM jobs WHERE id=?", (replacement_job_id,)).fetchone()
+    if row is None or replacement is None:
+        raise ValueError(f"Unknown job: {job_id if row is None else replacement_job_id}")
+    if row["status"] != "submitted":
+        raise ValueError(f"Job {job_id} is {row['status']}; only submitted applications can be withdrawn")
+    policy = swap_policy(row["company"], policies)
+    full = next(p for p in policies if p["id"] == policy["id"])
+    if company_key(replacement["company"], policies) != f"policy:{policy['id']}" or replacement["status"] != "queued":
+        raise ValueError(f"Replacement {replacement_job_id} is not a queued {row['company']} job")
+    if (replacement["fit_score"] or 0) < (row["fit_score"] or 0) + policy["swap"]["min_fit_gain"]:
+        raise ValueError(
+            f"Replacement fit {replacement['fit_score']} is not {policy['swap']['min_fit_gain']} above {row['fit_score']}"
+        )
+    if withdrawals_in_run(connection, run_id, full) >= policy["swap"]["max_withdrawals_per_run"]:
+        raise ValueError(f"This run already withdrew {policy['swap']['max_withdrawals_per_run']} {row['company']} applications")
+    now = iso_utc()
+    connection.execute(
+        """
+        UPDATE jobs SET status='withdrawn', withdrawn_at=?, withdrawal_evidence=?,
+            withdrawn_run_id=?, replaced_by=?, updated_at=? WHERE id=?
+        """,
+        (now, evidence.strip(), run_id, replacement_job_id, now, job_id),
+    )
+    cleared = clear_limits(connection, row["company"], policies)
+    job = dict(connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone())
+    return {**job, "limits_cleared": cleared}
+
+
 def requeue_jobs(connection: sqlite3.Connection, job_ids: Iterable[str]) -> list[str]:
     """Put blocked or ready-for-review jobs back in the queue for a fresh attempt."""
     requeued = []
@@ -1086,10 +1237,7 @@ def claim_next(
             (worker_id, now, now, row["id"]),
         )
         if run_id is None:
-            running = connection.execute(
-                "SELECT id FROM runs WHERE status='running' ORDER BY started_at DESC LIMIT 1"
-            ).fetchone()
-            run_id = running["id"] if running else None
+            run_id = latest_running_run(connection)
         connection.execute(
             "INSERT INTO attempts(job_id, run_id, worker_id, claimed_at) VALUES (?, ?, ?, ?)",
             (row["id"], run_id, worker_id, now),
@@ -1100,6 +1248,13 @@ def claim_next(
     except Exception:
         connection.execute("ROLLBACK")
         raise
+
+
+def latest_running_run(connection: sqlite3.Connection) -> str | None:
+    running = connection.execute(
+        "SELECT id FROM runs WHERE status='running' ORDER BY started_at DESC LIMIT 1"
+    ).fetchone()
+    return running["id"] if running else None
 
 
 def finish_attempt(connection: sqlite3.Connection, job_id: str, outcome: str) -> None:
@@ -1365,8 +1520,36 @@ def outcome_report(
         "skipped_by_ats": skipped_by_ats,
         "application_limits": list(active_limits(connection, policies).values()),
         "deferred": deferred_jobs(connection, policies),
+        "withdrawn": withdrawn_jobs(connection, run_id=run_id, since=since),
         "discovery": discovery,
     }
+
+
+def withdrawn_jobs(
+    connection: sqlite3.Connection, *, run_id: str | None = None, since: str | None = None
+) -> list[dict[str, Any]]:
+    """Applications withdrawn to free a slot, each with the job that replaced it."""
+    clauses = ["w.status='withdrawn'"]
+    params: list[Any] = []
+    if run_id:
+        clauses.append("w.withdrawn_run_id=?")
+        params.append(run_id)
+    if since:
+        clauses.append("w.withdrawn_at >= ?")
+        params.append(since)
+    return [
+        dict(row)
+        for row in connection.execute(
+            f"""
+            SELECT w.id AS job_id, w.company, w.title, w.fit_score, w.withdrawn_at,
+                r.id AS replacement_job_id, r.title AS replacement_title,
+                r.fit_score AS replacement_fit_score, r.status AS replacement_status
+            FROM jobs w LEFT JOIN jobs r ON r.id = w.replaced_by
+            WHERE {' AND '.join(clauses)} ORDER BY w.withdrawn_at
+            """,
+            params,
+        ).fetchall()
+    ]
 
 
 def block_job(
@@ -1563,6 +1746,11 @@ def digest_payload(
         lines.append(
             "Deferred by an application limit (still queued): "
             + ", ".join(f"{company} ({count})" for company, count in sorted(deferred.items()))
+        )
+    for job in outcomes["withdrawn"]:
+        lines.append(
+            f"Withdrew {job['company']} — {job['title']} (fit {job['fit_score']}) for "
+            f"{job['replacement_title']} (fit {job['replacement_fit_score']}, now {job['replacement_status']})"
         )
     if discovery["companies_checked"]:
         lines.append("")

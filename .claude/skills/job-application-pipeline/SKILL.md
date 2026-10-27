@@ -147,9 +147,13 @@ For a `blocked` result, call:
 python3 -m job_agent block --job-id JOB_ID --worker-id daily-browser-worker-N --category CATEGORY --message MESSAGE --review-url URL
 ```
 
-When the category is `application_limit` (the site refused because the account reached its application cap), add `--until DATE` if the worker's evidence gives the date the limit ends. The ledger records the cap, returns the job to `queued`, and `claim` then skips that company until the limit expires or is cleared, leaving its other jobs queued. Do not block or claim the company's other jobs by hand. `python3 -m job_agent limits` lists the companies under a cap and the jobs they defer; put them in the run summary. When a cap needs the user (withdrawing Amazon applications), add an `owner: "barry"` to-do unless one is open, and after they confirm, run `python3 -m job_agent clear-limit --company COMPANY`.
+When the category is `application_limit` (the site refused because the account reached its application cap), add `--until DATE` if the worker's evidence gives the date the limit ends. The ledger records the cap, returns the job to `queued`, and `claim` then skips that company until the limit expires or is cleared, leaving its other jobs queued. Do not block or claim the company's other jobs by hand. `python3 -m job_agent limits` lists the companies under a cap and the jobs they defer; put them in the run summary. A company whose policy has a `swap` (Amazon) frees its own slots with the swap procedure below. For any other cap that needs the user, add an `owner: "barry"` to-do unless one is open, and after they confirm, run `python3 -m job_agent clear-limit --company COMPANY`.
 
 Use the worker id of the slot that claimed the job. Reject malformed worker output and use SendMessage to ask the same worker to correct it before recording a result. Refill a slot only after its result is recorded and its live tab is preserved. Close a submitted application's tab once its result is recorded, since nothing is left to review there. Keep no more than five ready or blocked application tabs; close discovery and intermediate tabs.
+
+### Swap applications at capped companies
+
+Before the first claim, for each company whose policy has a `swap` (`company-policies --company NAME` shows it; today only Amazon) and that has queued jobs, follow the "Swap procedure" in that company's policy document (`references/amazon.md` in `company-application-policies`). It reads the site's active applications, runs `python3 -m job_agent swap-plan`, and either clears a cap that rejections have already freed or withdraws one weaker application with `python3 -m job_agent withdraw` so the stronger queued job can be claimed. Withdraw only what `swap-plan` pairs, one pair at a time, and only after the previous replacement was submitted. Put every withdrawal and its replacement in the run summary; the digest lists them.
 
 ### Application-worker concurrency
 
