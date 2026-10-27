@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import sys
 from pathlib import Path
@@ -28,17 +29,22 @@ from .core import (
     load_config,
     mark_notification,
     match_company_policy,
+    needs_tailored_resume,
     outcome_report,
     record_discovery,
+    record_outside_submission,
     recover_stale_claims,
     requeue_jobs,
     resume_text,
     score_jobs,
+    set_tailored_resume,
     submit_job,
     swap_plan,
+    tailoring_queue,
     utc_now,
     withdraw_job,
 )
+from .resume_render import render_resume
 from .feeds import DEFAULT_QUERIES, DEFAULT_REGISTRY_PATH, run_fetch_feeds
 
 
@@ -70,6 +76,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=10,
         help="Pages to walk per Workday board and per Amazon query (newest first)",
+    )
+    fetch_feeds.add_argument(
+        "--recency-hours",
+        type=int,
+        help="Backfill: keep postings this many hours old instead of the window since the last run; "
+        "scoring uses it for this run and the next run's window ignores it",
     )
     fetch_feeds.add_argument(
         "--run-id",
@@ -111,6 +123,39 @@ def build_parser() -> argparse.ArgumentParser:
     submit.add_argument("--confirmation-url", required=True)
     submit.add_argument("--evidence", required=True)
     submit.add_argument("--resume-verified", action="store_true", required=True)
+
+    tailor = subparsers.add_parser(
+        "tailor-queue", help="Queued jobs that need a tailored résumé (fit above the threshold, or a tailor_resume policy)"
+    )
+    tailor.add_argument(
+        "--out-dir", type=Path, help="Write each job's posting to <out-dir>/<job_id>/posting.md for the résumé tailor"
+    )
+
+    save_export = subparsers.add_parser(
+        "save-export",
+        help="Decode a docs-connector export (its JSON result, or the bare bytes_b64 string) saved in a file",
+    )
+    save_export.add_argument("--in", dest="source", type=Path, required=True)
+    save_export.add_argument("--out", type=Path, required=True, nargs="+", help="One or more files to write")
+
+    render = subparsers.add_parser(
+        "render-resume",
+        help="Render a tailored résumé (Markdown) to a one-page PDF plus a résumé-vs-posting screenshot "
+        "and record both on the queued job",
+    )
+    render.add_argument("--job-id", required=True)
+    render.add_argument("--markdown", type=Path, required=True)
+    render.add_argument("--out-dir", type=Path, required=True)
+
+    outside = subparsers.add_parser(
+        "record-applied",
+        help="Record an application sent outside the pipeline (e.g. by hand on Google Careers) so limits count it",
+    )
+    outside.add_argument("--url", required=True)
+    outside.add_argument("--company", required=True)
+    outside.add_argument("--title", required=True)
+    outside.add_argument("--submitted-at", required=True, help="ISO date or timestamp")
+    outside.add_argument("--evidence", required=True, help="Where it shows as submitted, e.g. the Careers dashboard")
 
     report = subparsers.add_parser("report")
     report.add_argument("--run-id")
@@ -180,7 +225,9 @@ def main(argv: list[str] | None = None) -> int:
         config = load_config(args.config)
         connection = connect_db(args.db)
         if args.command == "fetch-feeds":
-            window = recency_window_hours(connection, config, utc_now())
+            if args.recency_hours is not None and args.recency_hours < 1:
+                raise ValueError("--recency-hours must be positive")
+            window = args.recency_hours or recency_window_hours(connection, config, utc_now())
             result = run_fetch_feeds(
                 {**config, "recency_hours": window},
                 registry_path=args.registry,
@@ -188,7 +235,7 @@ def main(argv: list[str] | None = None) -> int:
                 queries=args.queries,
                 max_pages=args.max_pages,
             )
-            run_id = create_run(connection, args.run_id)
+            run_id = create_run(connection, args.run_id, recency_override_hours=args.recency_hours)
             summary = record_discovery(connection, run_id, result["boards"])
             result["run_id"] = run_id
             result["recency_hours"] = window
@@ -240,6 +287,15 @@ def main(argv: list[str] | None = None) -> int:
             )
             if claimed is not None:
                 claimed["submit"] = config["submit_applications"]
+                policies = load_company_policies(config["company_policies_path"])
+                claimed["resume_tailored"] = bool(claimed["resume_path"])
+                # The worker attaches this file: the job's tailored PDF, else the approved résumé.
+                claimed["resume_path"] = claimed["resume_path"] or str(
+                    Path(config["approved_resume_path"]).expanduser()
+                )
+                claimed["tailored_resume_missing"] = not claimed["resume_tailored"] and needs_tailored_resume(
+                    claimed, config, policies
+                )
             emit(claimed)
         elif args.command == "complete":
             emit(
@@ -261,6 +317,67 @@ def main(argv: list[str] | None = None) -> int:
                     evidence=args.evidence,
                     resume_verified=args.resume_verified,
                     submit_applications=config["submit_applications"],
+                )
+            )
+        elif args.command == "tailor-queue":
+            queue = tailoring_queue(connection, config, load_company_policies(config["company_policies_path"]))
+            for job in queue:
+                if args.out_dir:
+                    folder = args.out_dir / job["id"]
+                    folder.mkdir(parents=True, exist_ok=True)
+                    posting = folder / "posting.md"
+                    posting.write_text(
+                        f"# {job['company']} — {job['title']}\n\n{job['application_url']}\n\n{job.pop('description') or ''}\n",
+                        encoding="utf-8",
+                    )
+                    job["posting_path"] = str(posting)
+                    job["out_dir"] = str(folder)
+                else:
+                    job.pop("description")
+            emit(queue)
+        elif args.command == "save-export":
+            raw = args.source.read_text(encoding="utf-8").strip()
+            encoded = raw
+            if raw.startswith("{"):
+                payload = json.loads(raw)
+                encoded = (payload.get("data") or payload).get("bytes_b64") or ""
+            text = base64.b64decode(encoded, validate=True).decode("utf-8")
+            if not text.strip():
+                raise ValueError("The export is empty")
+            for out in args.out:
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_text(text, encoding="utf-8")
+            emit({"written": [str(out) for out in args.out], "characters": len(text)})
+        elif args.command == "render-resume":
+            job = connection.execute("SELECT * FROM jobs WHERE id=?", (args.job_id,)).fetchone()
+            if job is None:
+                raise ValueError(f"Unknown job: {args.job_id}")
+            rendered = render_resume(
+                args.markdown,
+                args.out_dir,
+                pdf_name=Path(config["approved_resume_filename"]).stem + ".pdf",
+                title=f"{job['company']} — {job['title']}",
+                url=job["application_url"] or job["canonical_url"],
+                description=job["description"] or "",
+            )
+            if rendered["pages"] != 1:
+                raise ValueError(
+                    f"The résumé renders to {rendered['pages']} pages; cut the least relevant line and render again "
+                    f"({rendered['resume_path']})"
+                )
+            set_tailored_resume(
+                connection, args.job_id, resume_path=rendered["resume_path"], compare_path=rendered["compare_path"]
+            )
+            emit(rendered)
+        elif args.command == "record-applied":
+            emit(
+                record_outside_submission(
+                    connection,
+                    url=args.url,
+                    company=args.company,
+                    title=args.title,
+                    submitted_at=args.submitted_at,
+                    evidence=args.evidence,
                 )
             )
         elif args.command == "report":

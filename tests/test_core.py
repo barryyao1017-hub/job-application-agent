@@ -25,16 +25,20 @@ from job_agent.core import (
     load_config,
     mark_notification,
     match_company_policy,
+    needs_tailored_resume,
     outcome_report,
     recency_window_hours,
     record_discovery,
+    record_outside_submission,
     recover_stale_claims,
     requeue_jobs,
     resume_text,
     score_candidate,
     score_jobs,
+    set_tailored_resume,
     submit_job,
     swap_plan,
+    tailoring_queue,
     withdraw_job,
 )
 
@@ -731,6 +735,134 @@ class ApplicationLimitTests(unittest.TestCase):
         self.assertEqual(limit["source"], "policy")
         later = datetime.now(timezone.utc) + timedelta(days=91)
         self.assertEqual(self.claim("w", now=later)["fit_score"], 94)
+
+
+class GoogleTests(unittest.TestCase):
+    """Google applies like any company: three submissions per 30 days, each with a tailored résumé."""
+
+    tearDown = CoreTests.tearDown
+    claim = ApplicationLimitTests.claim
+    job = ApplicationLimitTests.job
+
+    def setUp(self) -> None:
+        CoreTests.setUp(self)
+        (self.policy_root / "policies.json").write_text(
+            """{
+  "policies": [
+    {"id": "google", "company_names": ["Google", "Google DeepMind"], "handling": "auto_apply",
+     "documentation": "google.md", "reason": "Three per 30 days.", "tailor_resume": true,
+     "application_limit": {"description": "Three per 30 days.", "max_submissions": 3, "window_days": 30}}
+  ]
+}""",
+            encoding="utf-8",
+        )
+        self.policies = load_company_policies(self.cfg["company_policies_path"])
+
+    def google_url(self, number: int) -> str:
+        return f"https://www.google.com/about/careers/applications/jobs/results/{100000000000000000 + number}-software-engineer-iii-aiml"
+
+    def test_careers_urls_give_the_job_id_and_ats(self) -> None:
+        url = canonicalize_url(self.google_url(7))
+        self.assertEqual(extract_ats_job_id(url), "100000000000000007", "not the 'results' path segment")
+        self.assertEqual(infer_ats(url), "google")
+
+    def test_hand_sent_applications_count_toward_the_window(self) -> None:
+        ingest_candidates(
+            self.connection,
+            [{**self.job("Google", n, 20), "application_url": self.google_url(n)} for n in range(1, 5)],
+            self.run_id,
+        )
+        score_jobs(self.connection, self.cfg, self.run_id, now=NOW)
+        recent = (datetime.now(timezone.utc) - timedelta(days=3)).date().isoformat()
+        # One of the queued postings and two the ledger never saw were sent by hand.
+        known = record_outside_submission(
+            self.connection, url=self.google_url(1), company="Google", title="SWE III",
+            submitted_at=recent, evidence="Google Careers dashboard",
+        )
+        self.assertEqual(known["status"], "submitted")
+        self.assertTrue(known["confirmation_evidence"].startswith("outside the pipeline"))
+        for n in (8, 9):
+            record_outside_submission(
+                self.connection, url=self.google_url(n), company="Google", title=f"SWE III {n}",
+                submitted_at=recent, evidence="Google Careers dashboard",
+            )
+        self.assertEqual(self.connection.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 0)
+        self.assertIsNone(self.claim("w"), "three submissions in 30 days: Google is deferred")
+        self.assertEqual(len(deferred_jobs(self.connection, self.policies)), 3)
+        self.assertEqual(tailoring_queue(self.connection, self.cfg, self.policies), [], "capped: nothing to tailor yet")
+        later = datetime.now(timezone.utc) + timedelta(days=28)
+        self.assertEqual(self.claim("w", now=later)["company"], "Google")
+        with self.assertRaisesRegex(ValueError, "evidence"):
+            record_outside_submission(
+                self.connection, url=self.google_url(2), company="Google", title="x", submitted_at=recent, evidence=" "
+            )
+
+    def test_google_and_high_fits_need_a_tailored_resume(self) -> None:
+        ingest_candidates(
+            self.connection,
+            [
+                {**self.job("Google", 1, 15), "application_url": self.google_url(1)},
+                self.job("Acme", 2, 16),
+                self.job("Beta", 3, 15),
+            ],
+            self.run_id,
+        )
+        score_jobs(self.connection, self.cfg, self.run_id, now=NOW)
+        queue = tailoring_queue(self.connection, self.cfg, self.policies)
+        self.assertEqual([(job["company"], job["fit_score"]) for job in queue], [("Acme", 91), ("Google", 90)])
+        self.assertFalse(needs_tailored_resume({"company": "Beta", "fit_score": 90}, self.cfg, self.policies), "above 90, not at it")
+
+        pdf = self.root / "Jiayi_Yao_Resume.pdf"
+        png = self.root / "Resume_vs_JD.png"
+        pdf.write_bytes(b"%PDF")
+        png.write_bytes(b"png")
+        acme = queue[0]["id"]
+        with self.assertRaisesRegex(ValueError, "must be a PDF"):
+            set_tailored_resume(self.connection, acme, resume_path=str(png), compare_path=str(png))
+        with self.assertRaisesRegex(ValueError, "does not exist"):
+            set_tailored_resume(self.connection, acme, resume_path=str(self.root / "nope.pdf"), compare_path=str(png))
+        job = set_tailored_resume(self.connection, acme, resume_path=str(pdf), compare_path=str(png))
+        self.assertEqual(job["resume_path"], str(pdf.resolve()))
+        self.assertEqual([j["company"] for j in tailoring_queue(self.connection, self.cfg, self.policies)], ["Google"])
+        claimed = self.claim("w")
+        self.assertEqual((claimed["company"], claimed["resume_path"]), ("Acme", str(pdf.resolve())))
+        with self.assertRaisesRegex(ValueError, "before it is claimed"):
+            set_tailored_resume(self.connection, acme, resume_path=str(pdf), compare_path=str(png))
+
+    def test_claim_names_the_resume_to_attach(self) -> None:
+        import contextlib
+        import io
+        import json
+
+        from job_agent.cli import main
+
+        config_path = self.root / "config.json"
+        config_path.write_text(json.dumps(self.cfg), encoding="utf-8")
+        ingest_candidates(
+            self.connection, [{**self.job("Google", 1, 15), "application_url": self.google_url(1)}], self.run_id
+        )
+        score_jobs(self.connection, self.cfg, self.run_id, now=NOW)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = main(["--config", str(config_path), "--db", str(self.root / "jobs.sqlite3"), "claim", "--worker-id", "w"])
+        claimed = json.loads(out.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(claimed["resume_path"], str(self.resume), "no tailored PDF yet: the approved résumé")
+        self.assertFalse(claimed["resume_tailored"])
+        self.assertTrue(claimed["tailored_resume_missing"])
+        self.assertTrue(claimed["submit"])
+
+    def test_backfill_run_scores_with_its_own_window_and_is_not_a_previous_discovery(self) -> None:
+        daily = create_run(self.connection, "daily")
+        self.connection.execute("UPDATE runs SET started_at=? WHERE id=?", ((NOW - timedelta(hours=24)).isoformat(), daily))
+        record_discovery(self.connection, daily, [{"company": "Acme", "ats": "greenhouse", "fetched": 5, "kept": 0, "errors": []}])
+        backfill = create_run(self.connection, "backfill", recency_override_hours=24 * 30)
+        self.connection.execute("UPDATE runs SET started_at=? WHERE id=?", ((NOW - timedelta(hours=1)).isoformat(), backfill))
+        record_discovery(self.connection, backfill, [{"company": "Google", "ats": "google", "fetched": 9, "kept": 1, "errors": []}])
+        self.assertEqual(recency_window_hours(self.connection, self.cfg, NOW), 27, "measured from the daily run")
+        ingest_candidates(self.connection, [candidate(posted_at=(NOW - timedelta(days=12)).isoformat())], backfill)
+        score_jobs(self.connection, self.cfg, backfill)
+        self.assertEqual(self.connection.execute("SELECT status FROM jobs WHERE run_id='backfill'").fetchone()["status"], "queued")
 
 
 class SwapTests(unittest.TestCase):

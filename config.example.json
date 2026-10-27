@@ -12,6 +12,12 @@
   "submit_applications": false,
   "max_parallel_workers": 2,
   "approved_resume_filename": "Jiayi_Yao_resume.docx",
+  "tailored_resume_above_fit_score": 90,
+  "resume_doc": {
+    "doc_id": "Claude Doc id of the résumé working draft",
+    "base_tab": "tab id of the base résumé",
+    "bank_tabs": ["tab ids of other true résumé versions to borrow bullets from"]
+  },
   "role_keywords": [
     "machine learning engineer",
     "ml engineer",

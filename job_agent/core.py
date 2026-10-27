@@ -113,6 +113,9 @@ def load_config(path: Path | str = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
     if not isinstance(config["submit_applications"], bool):
         raise ValueError("submit_applications must be true or false")
     config.setdefault("limited_company_minimum_fit_score", 90)
+    # Jobs scoring above this (and every job at a company whose policy sets
+    # tailor_resume) are applied to with a résumé tailored to the posting.
+    config.setdefault("tailored_resume_above_fit_score", 90)
     config.setdefault("max_parallel_workers", 2)
     workers = config["max_parallel_workers"]
     if isinstance(workers, bool) or not isinstance(workers, int) or not 1 <= workers <= 3:
@@ -176,6 +179,7 @@ def load_company_policies(path: Path | str = DEFAULT_COMPANY_POLICIES_PATH) -> l
                 "documentation": str(document_path),
                 "reason": str(raw.get("reason") or "").strip(),
                 "application_limit": parse_application_limit(policy_id, raw.get("application_limit")),
+                "tailor_resume": raw.get("tailor_resume") is True,
             }
         )
         policies[-1]["swap"] = parse_swap(policy_id, raw.get("swap"), policies[-1]["application_limit"])
@@ -270,6 +274,7 @@ def extract_ats_job_id(url: str) -> str | None:
         if query.get(key):
             return query[key]
     patterns = (
+        r"/jobs/results/(\d{6,})",  # Google Careers: /jobs/results/<id>-<slug>
         r"/jobs?/(?:view/)?([A-Za-z0-9_-]{4,})",
         r"/job/([A-Za-z0-9_-]{4,})",
         r"/requisitions?/([A-Za-z0-9_-]{4,})",
@@ -326,6 +331,8 @@ def infer_ats(url: str | None, feed_ats: str | None = None) -> str:
     for marker, ats in ATS_HOST_MARKERS:
         if marker in host:
             return ats
+    if host.endswith("google.com") and parts.path.startswith("/about/careers/"):
+        return "google"
     if "gh_jid=" in parts.query.lower():
         return "greenhouse"
     if feed_ats:
@@ -556,7 +563,10 @@ CREATE TABLE IF NOT EXISTS runs (
     id TEXT PRIMARY KEY,
     started_at TEXT NOT NULL,
     completed_at TEXT,
-    status TEXT NOT NULL DEFAULT 'running'
+    status TEXT NOT NULL DEFAULT 'running',
+    -- Set by fetch-feeds --recency-hours (a backfill): scoring uses it, and the
+    -- next run's window ignores this run.
+    recency_override_hours INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS jobs (
@@ -598,6 +608,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     withdrawal_evidence TEXT,
     withdrawn_run_id TEXT,
     replaced_by TEXT,
+    -- A résumé tailored to this posting (PDF) and its résumé-vs-posting screenshot.
+    resume_path TEXT,
+    resume_compare_path TEXT,
     updated_at TEXT NOT NULL
 );
 
@@ -684,9 +697,14 @@ def connect_db(path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
         ("withdrawal_evidence", "TEXT"),
         ("withdrawn_run_id", "TEXT"),
         ("replaced_by", "TEXT"),
+        ("resume_path", "TEXT"),
+        ("resume_compare_path", "TEXT"),
     ):
         if name not in existing_columns:
             connection.execute(f"ALTER TABLE jobs ADD COLUMN {name} {column_type}")
+    run_columns = {row["name"] for row in connection.execute("PRAGMA table_info(runs)").fetchall()}
+    if "recency_override_hours" not in run_columns:
+        connection.execute("ALTER TABLE runs ADD COLUMN recency_override_hours INTEGER")
     for row in connection.execute(
         "SELECT id, application_url, canonical_url FROM jobs WHERE ats IS NULL OR ats LIKE '%.%'"
     ).fetchall():
@@ -697,11 +715,13 @@ def connect_db(path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     return connection
 
 
-def create_run(connection: sqlite3.Connection, run_id: str | None = None) -> str:
+def create_run(
+    connection: sqlite3.Connection, run_id: str | None = None, *, recency_override_hours: int | None = None
+) -> str:
     resolved = run_id or str(uuid.uuid4())
     connection.execute(
-        "INSERT OR IGNORE INTO runs(id, started_at, status) VALUES (?, ?, 'running')",
-        (resolved, iso_utc()),
+        "INSERT OR IGNORE INTO runs(id, started_at, status, recency_override_hours) VALUES (?, ?, 'running', ?)",
+        (resolved, iso_utc(), recency_override_hours),
     )
     return resolved
 
@@ -759,13 +779,14 @@ def recency_window_hours(connection: sqlite3.Connection, config: dict[str, Any],
 
     At least ``recency_hours``; at most three days, so a long gap does not flood the queue.
     The daily run drifts (07:00 one day, 13:00 after a missed run the next), and a fixed 24h
-    window then leaves hours that no run ever looks at.
+    window then leaves hours that no run ever looks at. A backfill run (``recency_override_hours``)
+    is not a previous discovery: it may have covered only some boards.
     """
     base = int(config["recency_hours"])
     row = connection.execute(
         """
         SELECT MAX(runs.started_at) AS started_at FROM runs
-        WHERE runs.started_at < ? AND EXISTS (
+        WHERE runs.started_at < ? AND runs.recency_override_hours IS NULL AND EXISTS (
             SELECT 1 FROM run_boards WHERE run_boards.run_id = runs.id AND run_boards.fetched > 0
         )
         """,
@@ -946,6 +967,112 @@ def clear_limits(
     return cursor.rowcount
 
 
+def record_outside_submission(
+    connection: sqlite3.Connection,
+    *,
+    url: str,
+    company: str,
+    title: str,
+    submitted_at: str,
+    evidence: str,
+) -> dict[str, Any]:
+    """Record an application the user sent outside the pipeline, so windowed limits count it.
+
+    The posting's existing row becomes ``submitted``; an unseen posting gets a new
+    row. No attempt is logged: the submission rate measures the workers only.
+    """
+    when = parse_datetime(submitted_at)
+    if when is None:
+        raise ValueError(f"--submitted-at is not an ISO date or timestamp: {submitted_at}")
+    if not evidence.strip():
+        raise ValueError("Recording an outside application requires evidence (where it shows as submitted)")
+    canonical_url = canonicalize_url(url)
+    ats_job_id = extract_ats_job_id(canonical_url)
+    row = connection.execute(
+        "SELECT * FROM jobs WHERE canonical_url=? OR (lower(company)=lower(?) AND ats_job_id=?)",
+        (canonical_url, company.strip(), ats_job_id),
+    ).fetchone()
+    now = iso_utc()
+    if row is None:
+        run_id = latest_running_run(connection) or create_run(connection)
+        job_id = str(uuid.uuid4())
+        connection.execute(
+            """
+            INSERT INTO jobs(
+                id, run_id, source, source_url, canonical_url, ats_job_id, company, title,
+                discovered_at, application_url, ats, status, updated_at
+            ) VALUES (?, ?, 'outside', ?, ?, ?, ?, ?, ?, ?, ?, 'discovered', ?)
+            """,
+            (job_id, run_id, url, canonical_url, ats_job_id, company.strip(), title.strip(), now, url, infer_ats(url), now),
+        )
+    elif row["status"] in ("claimed", "withdrawn"):
+        raise ValueError(f"Job {row['id']} is {row['status']}; not recording it as submitted")
+    else:
+        job_id = row["id"]
+    connection.execute(
+        """
+        UPDATE jobs SET status='submitted', submitted_at=COALESCE(submitted_at, ?),
+            confirmation_evidence=COALESCE(confirmation_evidence, ?), updated_at=? WHERE id=?
+        """,
+        (iso_utc(when), f"outside the pipeline: {evidence.strip()}", now, job_id),
+    )
+    return dict(connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone())
+
+
+def needs_tailored_resume(row: Any, config: dict[str, Any], policies: list[dict[str, Any]]) -> bool:
+    """A job gets a tailored résumé above ``tailored_resume_above_fit_score`` or when its policy says tailor_resume."""
+    policy = match_company_policy(row["company"], policies)
+    return bool(policy and policy.get("tailor_resume")) or (row["fit_score"] or 0) > int(
+        config.get("tailored_resume_above_fit_score", 90)
+    )
+
+
+def tailoring_queue(
+    connection: sqlite3.Connection, config: dict[str, Any], policies: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Queued jobs that still need a tailored résumé, best fit first.
+
+    Jobs deferred by an application cap are left out until it lifts, so no run
+    tailors a résumé it cannot use.
+    """
+    capped = active_limits(connection, policies)
+    return [
+        dict(row)
+        for row in connection.execute(
+            """
+            SELECT id, company, title, fit_score, application_url, ats, description FROM jobs
+            WHERE status='queued' AND resume_path IS NULL
+            ORDER BY fit_score DESC, COALESCE(posted_at, discovered_at) DESC
+            """
+        ).fetchall()
+        if needs_tailored_resume(row, config, policies) and company_key(row["company"], policies) not in capped
+    ]
+
+
+def set_tailored_resume(
+    connection: sqlite3.Connection, job_id: str, *, resume_path: str, compare_path: str
+) -> dict[str, Any]:
+    """Attach a tailored résumé PDF and its comparison screenshot to a job before it is claimed."""
+    row = connection.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if row is None:
+        raise ValueError(f"Unknown job: {job_id}")
+    if row["status"] not in ("queued", "blocked", "ready_for_review"):
+        raise ValueError(f"Job {job_id} is {row['status']}; a résumé can only be set before it is claimed")
+    paths = {}
+    for name, value in (("résumé", resume_path), ("comparison", compare_path)):
+        path = Path(value).expanduser().resolve()
+        if not path.is_file():
+            raise ValueError(f"The tailored {name} file does not exist: {path}")
+        paths[name] = str(path)
+    if Path(paths["résumé"]).suffix.lower() != ".pdf":
+        raise ValueError("A tailored résumé must be a PDF")
+    connection.execute(
+        "UPDATE jobs SET resume_path=?, resume_compare_path=?, updated_at=? WHERE id=?",
+        (paths["résumé"], paths["comparison"], iso_utc(), job_id),
+    )
+    return dict(connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone())
+
+
 SWAPPABLE_ATS_STATUS = "SUBMITTED"
 
 
@@ -1110,12 +1237,14 @@ def score_jobs(
     for row in rows:
         candidate = dict(row)
         if now is None and row["run_id"] not in windows:
-            run = connection.execute("SELECT started_at FROM runs WHERE id=?", (row["run_id"],)).fetchone()
+            run = connection.execute(
+                "SELECT started_at, recency_override_hours FROM runs WHERE id=?", (row["run_id"],)
+            ).fetchone()
             started = parse_datetime(run["started_at"]) if run else None
-            windows[row["run_id"]] = (
-                {**config, "recency_hours": recency_window_hours(connection, config, started)} if started else config,
-                started,
+            hours = (run["recency_override_hours"] if run else None) or (
+                recency_window_hours(connection, config, started) if started else None
             )
+            windows[row["run_id"]] = ({**config, "recency_hours": hours} if hours else config, started)
         run_config, reference = windows.get(row["run_id"], (config, now))
         result = score_candidate(candidate, run_config, now=reference)
         if result.skip_reason:
@@ -1473,7 +1602,7 @@ def outcome_report(
         f"""
         SELECT id, company, title, status, blocker_category, blocker_message,
             COALESCE(review_url, application_url) AS url, submitted_at,
-            confirmation_evidence
+            confirmation_evidence, resume_path, resume_compare_path
         FROM jobs WHERE {' AND '.join(clauses)}
         ORDER BY updated_at
         """,
@@ -1493,6 +1622,8 @@ def outcome_report(
                     "title": row["title"],
                     "submitted_at": row["submitted_at"],
                     "confirmation_evidence": row["confirmation_evidence"],
+                    "resume_path": row["resume_path"],
+                    "resume_compare_path": row["resume_compare_path"],
                 }
             )
         elif row["status"] == "ready_for_review":

@@ -3,14 +3,15 @@
 Pulls the public job boards of the companies listed in a registry file
 (Greenhouse, Lever and Ashby publish official unauthenticated JSON boards;
 Workday's ``/wday/cxs`` endpoint and ``amazon.jobs/en/search.json`` are
-unofficial but stable), keeps the postings that look like recent ML/Data roles
+unofficial but stable; Google Careers embeds each results page's jobs as JSON in
+the HTML), keeps the postings that look like recent ML/Data roles
 in the preferred locations, and writes them in the ``discovered.json`` shape
 that ``python3 -m job_agent discover`` ingests.
 
 Only the standard library is used. Each board is fetched on its own thread and
 a failing board is reported in the stats instead of aborting the run.
 
-Timestamps: Greenhouse, Lever and Ashby give exact publish times. Workday only
+Timestamps: Greenhouse, Lever, Ashby and Google give exact publish times. Workday only
 says "Posted Today" / "Posted Yesterday" / "Posted N Days Ago" and Amazon gives
 a calendar date, so those postings get ``posted_at`` set to the end of that day
 in the configured timezone (capped at fetch time) and carry
@@ -52,7 +53,7 @@ DEFAULT_QUERIES = (
     "applied scientist",
     "ai engineer",
 )
-SUPPORTED_ATS = ("greenhouse", "lever", "ashby", "workday", "amazon")
+SUPPORTED_ATS = ("greenhouse", "lever", "ashby", "workday", "amazon", "google")
 REQUEST_TIMEOUT_SECONDS = 20
 USER_AGENT = "Mozilla/5.0 (compatible; job-application-agent/0.1)"
 MAX_DESCRIPTION_CHARS = 6000
@@ -60,12 +61,37 @@ MAX_WORKERS = 12
 DETAIL_WORKERS = 6
 WORKDAY_PAGE_SIZE = 20
 AMAZON_PAGE_SIZE = 100
+GOOGLE_RESULTS_URL = "https://www.google.com/about/careers/applications/jobs/results/"
+# The searches and Bay Area offices the weekly Google bot used; a registry entry's
+# "queries" and "locations" override them.
+GOOGLE_QUERIES = (
+    '"Software Engineer III" recommendations',
+    "ranking",
+    "personalization",
+    "Discover",
+    '"machine learning"',
+    '"AI/ML"',
+    "retrieval",
+    "YouTube",
+)
+GOOGLE_LOCATIONS = (
+    "Mountain View, CA, USA",
+    "San Bruno, CA, USA",
+    "Sunnyvale, CA, USA",
+    "San Francisco, CA, USA",
+    "San Jose, CA, USA",
+)
+# The target is L4 (Software Engineer III, or untitled roles Google tags Mid).
+GOOGLE_LEVEL_SKIP_PATTERN = re.compile(
+    r"\b(?:senior|staff|principal|lead|distinguished|phd|early career|university graduate|new grad)\b"
+)
 WORKDAY_POSTED_PATTERN = re.compile(r"posted\s+(\d+)\+?\s+days?\s+ago", re.IGNORECASE)
 # CA bundles to fall back on when this Python ships none: python.org's macOS
 # installer leaves etc/openssl empty until "Install Certificates.command" runs.
 FALLBACK_CA_FILES = ("/etc/ssl/cert.pem", "/opt/homebrew/etc/ca-certificates/cert.pem", "/usr/local/etc/ca-certificates/cert.pem")
 
 Fetch = Callable[[str, dict[str, Any] | None], Any]
+FetchText = Callable[[str], str]
 
 
 # --- HTTP ----------------------------------------------------------------------
@@ -97,6 +123,15 @@ def fetch_json(url: str, payload: dict[str, Any] | None = None) -> Any:
         request, timeout=REQUEST_TIMEOUT_SECONDS, context=ssl_context()
     ) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def fetch_html(url: str) -> str:
+    """GET ``url`` and return the body as text (for boards that only serve HTML)."""
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "text/html"})
+    with urllib.request.urlopen(
+        request, timeout=REQUEST_TIMEOUT_SECONDS, context=ssl_context()
+    ) as response:
+        return response.read().decode("utf-8", errors="replace")
 
 
 # --- Registry ------------------------------------------------------------------
@@ -695,12 +730,127 @@ def fetch_amazon(
     return result
 
 
+def google_slug(title: str) -> str:
+    """Google's URL slug: lowercase, punctuation dropped ("AI/ML" -> "aiml"), spaces to hyphens."""
+    return "-".join(re.sub(r"[^a-z0-9\s]", "", title.lower()).split())
+
+
+def google_text(field: Any) -> str:
+    """Google wraps each HTML block as ``[null, "<html>"]``."""
+    if isinstance(field, list) and len(field) > 1 and isinstance(field[1], str):
+        return strip_html(field[1])
+    return ""
+
+
+def parse_google_results(page: str) -> tuple[list[list[Any]], int]:
+    """The jobs on one Google Careers results page and the search's total, from its ``ds:1`` data block."""
+    marker = page.find("AF_initDataCallback({key: 'ds:1'")
+    if marker < 0:
+        raise ValueError("Google Careers page has no ds:1 job data")
+    start = page.index("data:", marker) + len("data:")
+    data, _ = json.JSONDecoder().raw_decode(page, start)
+    jobs = [job for job in (data[0] or []) if isinstance(job, list) and len(job) > 12]
+    total = data[2] if len(data) > 2 and isinstance(data[2], int) else len(jobs)
+    return jobs, total
+
+
+def google_posted_at(job: list[Any]) -> datetime | None:
+    """The first ``[unix_seconds, nanos]`` group is the publish time (later ones are updates)."""
+    stamp = job[12] if len(job) > 12 else None
+    if not isinstance(stamp, list) or not stamp or not isinstance(stamp[0], int):
+        return None
+    return datetime.fromtimestamp(stamp[0], tz=timezone.utc)
+
+
+def fetch_google(
+    entry: dict[str, Any],
+    config: dict[str, Any],
+    now: datetime,
+    fetch: Fetch,
+    *,
+    max_pages: int,
+    fetch_text: FetchText,
+    **_: Any,
+) -> BoardResult:
+    """Search Google Careers newest-first for each query; stop once two pages have nothing recent.
+
+    Results pages carry each job's full text, so no detail fetch is needed. Titles
+    above or below L4 (Senior, Staff, PhD, early career) are skipped as title misses.
+    """
+    result = BoardResult(entry)
+    queries = tuple(entry.get("queries") or GOOGLE_QUERIES)
+    locations = tuple(entry.get("locations") or GOOGLE_LOCATIONS)
+
+    def walk(query: str) -> list[list[Any]]:
+        collected: list[list[Any]] = []
+        stale_pages = 0
+        for page in range(1, max_pages + 1):
+            params = [("q", query), *(("location", place) for place in locations), ("sort_by", "date"), ("page", page)]
+            jobs, total = parse_google_results(fetch_text(f"{GOOGLE_RESULTS_URL}?{urllib.parse.urlencode(params)}"))
+            collected.extend(jobs)
+            page_has_recent = any(is_recent(google_posted_at(job), now, config) for job in jobs)
+            stale_pages = 0 if page_has_recent else stale_pages + 1
+            if not jobs or stale_pages >= 2 or page * len(jobs) >= total:
+                break
+        return collected
+
+    with ThreadPoolExecutor(max_workers=min(DETAIL_WORKERS, len(queries) or 1)) as pool:
+        per_query = list(pool.map(walk, queries))
+    seen: set[str] = set()
+    for jobs in per_query:
+        for job in jobs:
+            job_id = str(job[0] or "")
+            if not job_id or job_id in seen:
+                continue
+            seen.add(job_id)
+            title = str(job[1] or "")
+            if GOOGLE_LEVEL_SKIP_PATTERN.search(title.lower()):
+                result.fetched += 1
+                result.skipped["title"] += 1
+                continue
+            places = [place[0] for place in (job[9] or []) if isinstance(place, list) and place]
+            location = join_locations(places)
+            remote = "remote" in location.lower()
+            posted_at = google_posted_at(job)
+            url = f"{GOOGLE_RESULTS_URL}{job_id}-{google_slug(title)}"
+            result.consider(
+                config,
+                now,
+                title=title,
+                posted_at=posted_at,
+                location=location,
+                remote=remote,
+                build=lambda job=job, job_id=job_id, title=title, url=url, location=location, remote=remote, posted_at=posted_at: make_candidate(
+                    company=entry["company"],
+                    ats="google",
+                    title=title,
+                    url=url,
+                    location=location,
+                    remote=remote,
+                    posted_at=posted_at,
+                    # Qualifications first: they gate the application and must survive the clip.
+                    description="\n".join(
+                        part
+                        for part in (
+                            google_text(job[4]),
+                            google_text(job[10]) if len(job) > 10 else "",
+                            "Responsibilities:\n" + google_text(job[3]) if google_text(job[3]) else "",
+                        )
+                        if part
+                    ),
+                    ats_job_id=job_id,
+                ),
+            )
+    return result
+
+
 FETCHERS: dict[str, Callable[..., BoardResult]] = {
     "greenhouse": fetch_greenhouse,
     "lever": fetch_lever,
     "ashby": fetch_ashby,
     "workday": fetch_workday,
     "amazon": fetch_amazon,
+    "google": fetch_google,
 }
 
 
@@ -716,11 +866,12 @@ def fetch_board(
     queries: tuple[str, ...],
     max_pages: int,
     zone: ZoneInfo,
+    fetch_text: FetchText = fetch_html,
 ) -> BoardResult:
     started = time.monotonic()
     try:
         result = FETCHERS[entry["ats"]](
-            entry, config, now, fetch, queries=queries, max_pages=max_pages, zone=zone
+            entry, config, now, fetch, queries=queries, max_pages=max_pages, zone=zone, fetch_text=fetch_text
         )
     except Exception as exc:  # noqa: BLE001 - a failing board must not abort the run
         result = BoardResult(entry)
@@ -737,6 +888,7 @@ def fetch_feeds(
     max_pages: int = 10,
     now: datetime | None = None,
     fetch: Fetch | None = None,
+    fetch_text: FetchText | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Fetch every registry board concurrently. Returns (candidates, per-board stats)."""
     current = now or utc_now()
@@ -756,6 +908,7 @@ def fetch_feeds(
                     queries=query_tuple,
                     max_pages=max(1, int(max_pages)),
                     zone=zone,
+                    fetch_text=fetch_text or fetch_html,
                 ),
                 registry,
             )
@@ -782,11 +935,12 @@ def run_fetch_feeds(
     max_pages: int = 10,
     now: datetime | None = None,
     fetch: Fetch | None = None,
+    fetch_text: FetchText | None = None,
 ) -> dict[str, Any]:
     """CLI entry point: load the registry, fetch, write ``out_path``, return the stats payload."""
     registry = load_registry(registry_path)
     candidates, boards = fetch_feeds(
-        registry, config, queries=queries, max_pages=max_pages, now=now, fetch=fetch
+        registry, config, queries=queries, max_pages=max_pages, now=now, fetch=fetch, fetch_text=fetch_text
     )
     output = Path(out_path).expanduser()
     output.parent.mkdir(parents=True, exist_ok=True)
