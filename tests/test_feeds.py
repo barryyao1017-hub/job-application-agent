@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import ssl
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -20,6 +21,7 @@ from job_agent.feeds import (
     fetch_feeds,
     load_registry,
     run_fetch_feeds,
+    ssl_context,
     strip_html,
     workday_posted_at,
 )
@@ -403,6 +405,32 @@ class FeedRunTests(unittest.TestCase):
                 )
             self.assertEqual(status, 1)
             self.assertEqual(json.loads(buffer.getvalue())["type"], "FileNotFoundError")
+
+
+class SslContextTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        ssl_context.cache_clear()
+
+    def test_falls_back_to_a_system_bundle_when_python_has_none(self) -> None:
+        empty = ssl.DefaultVerifyPaths(None, None, "SSL_CERT_FILE", "", "SSL_CERT_DIR", "")
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = Path(tmp) / "cert.pem"
+            bundle.write_text(ssl.DER_cert_to_PEM_cert(b"x"))
+            ssl_context.cache_clear()
+            with mock.patch("job_agent.feeds.ssl.get_default_verify_paths", return_value=empty), mock.patch(
+                "job_agent.feeds.FALLBACK_CA_FILES", ("/nonexistent/cert.pem", str(bundle))
+            ), mock.patch.object(ssl.SSLContext, "load_verify_locations") as load:
+                ssl_context()
+        load.assert_called_once_with(cafile=str(bundle))
+
+    def test_keeps_python_defaults_when_it_has_a_bundle(self) -> None:
+        found = ssl.DefaultVerifyPaths("/some/cert.pem", None, "SSL_CERT_FILE", "", "SSL_CERT_DIR", "")
+        ssl_context.cache_clear()
+        with mock.patch("job_agent.feeds.ssl.get_default_verify_paths", return_value=found), mock.patch.object(
+            ssl.SSLContext, "load_verify_locations"
+        ) as load:
+            ssl_context()
+        load.assert_not_called()
 
 
 class RegistryTests(unittest.TestCase):
