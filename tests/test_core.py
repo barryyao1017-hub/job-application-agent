@@ -26,6 +26,7 @@ from job_agent.core import (
     mark_notification,
     match_company_policy,
     outcome_report,
+    recency_window_hours,
     record_discovery,
     recover_stale_claims,
     requeue_jobs,
@@ -33,6 +34,8 @@ from job_agent.core import (
     score_candidate,
     score_jobs,
     submit_job,
+    swap_plan,
+    withdraw_job,
 )
 
 
@@ -275,14 +278,29 @@ class CoreTests(unittest.TestCase):
 
     def test_state_abbreviation_location_terms(self) -> None:
         cfg = {**self.cfg, "preferred_location_terms": [", ca", ", wa"]}
-        for location in ("San Mateo, CA", "Kirkland, WA"):
+        for location in ("San Mateo, CA", "Kirkland, WA", "US-CA-Menlo Park", "USA-WA-Seattle"):
             with self.subTest(location=location):
                 result = score_candidate(candidate(location=location), cfg, now=NOW)
                 self.assertIsNone(result.skip_reason)
-        for location in ("Toronto, Canada", "Vancouver, Washington DC area, Wakanda"):
+        for location in ("Toronto, Canada", "Vancouver, Washington DC area, Wakanda", "US-NY-New York"):
             with self.subTest(location=location):
                 result = score_candidate(candidate(location=location), cfg, now=NOW)
                 self.assertIn("location", result.skip_reason or "")
+
+    def test_recency_window_reaches_back_to_the_previous_discovery(self) -> None:
+        self.assertEqual(recency_window_hours(self.connection, self.cfg, NOW), 24, "no earlier discovery")
+        earlier = create_run(self.connection, "earlier")
+        self.connection.execute("UPDATE runs SET started_at=? WHERE id=?", ((NOW - timedelta(hours=30)).isoformat(), earlier))
+        record_discovery(self.connection, earlier, [{"company": "Acme", "ats": "greenhouse", "fetched": 5, "kept": 1, "errors": []}])
+        self.assertEqual(recency_window_hours(self.connection, self.cfg, NOW), 33)
+        self.assertEqual(recency_window_hours(self.connection, self.cfg, NOW + timedelta(days=5)), 72, "capped at three days")
+        # A 28-hour-old posting from that gap survives scoring, measured at its run's start.
+        late = create_run(self.connection, "late")
+        self.connection.execute("UPDATE runs SET started_at=? WHERE id=?", (NOW.isoformat(), late))
+        ingest_candidates(self.connection, [candidate(posted_at=(NOW - timedelta(hours=28)).isoformat())], late)
+        score_jobs(self.connection, self.cfg, late)
+        status = self.connection.execute("SELECT status FROM jobs WHERE run_id='late'").fetchone()["status"]
+        self.assertEqual(status, "queued")
 
     def test_atomic_claim_and_recovery(self) -> None:
         ingest_candidates(self.connection, [candidate()], self.run_id)
@@ -713,6 +731,112 @@ class ApplicationLimitTests(unittest.TestCase):
         self.assertEqual(limit["source"], "policy")
         later = datetime.now(timezone.utc) + timedelta(days=91)
         self.assertEqual(self.claim("w", now=later)["fit_score"], 94)
+
+
+class SwapTests(unittest.TestCase):
+    """Withdrawing a weaker active Amazon application to free a slot for a stronger queued one."""
+
+    tearDown = CoreTests.tearDown
+    job = ApplicationLimitTests.job
+
+    def setUp(self) -> None:
+        CoreTests.setUp(self)
+        (self.policy_root / "amazon.md").write_text("# Amazon\n", encoding="utf-8")
+        (self.policy_root / "policies.json").write_text(
+            """{
+  "policies": [
+    {"id": "amazon", "company_names": ["Amazon", "AWS"], "handling": "auto_apply",
+     "documentation": "amazon.md", "reason": "Ten active applications.",
+     "application_limit": {"description": "Ten active applications per account.", "max_active": 3},
+     "swap": {"min_fit_gain": 10, "max_withdrawals_per_run": 1}}
+  ]
+}""",
+            encoding="utf-8",
+        )
+        self.policies = load_company_policies(self.cfg["company_policies_path"])
+        # Submitted 76, 80, 95 (ATS ids 1-3); queued 93 and 92 (ids 4-5).
+        ingest_candidates(
+            self.connection,
+            [self.job("Amazon", n, skill) for n, skill in ((1, 1), (2, 5), (3, 20), (4, 18), (5, 17))],
+            self.run_id,
+        )
+        score_jobs(self.connection, self.cfg, self.run_id, now=NOW)
+        for ats_id, fit in (("1", 76), ("2", 80), ("3", 95), ("4", 93), ("5", 92)):
+            self.connection.execute("UPDATE jobs SET ats_job_id=? WHERE fit_score=?", (ats_id, fit))
+        self.connection.execute(
+            "UPDATE jobs SET status='submitted', submitted_at=? WHERE ats_job_id IN ('1', '2', '3')", (NOW.isoformat(),)
+        )
+        self.connection.execute("UPDATE jobs SET status='queued' WHERE ats_job_id IN ('4', '5')")
+        self.ids = {
+            row["ats_job_id"]: row["id"] for row in self.connection.execute("SELECT id, ats_job_id FROM jobs")
+        }
+
+    def active(self, *ids: str, status: str = "SUBMITTED") -> list[dict]:
+        return [{"ats_job_id": job_id, "status": status} for job_id in ids]
+
+    def plan(self, active: list[dict], **kwargs) -> dict:
+        return swap_plan(self.connection, "Amazon", active, self.policies, run_id=self.run_id, **kwargs)
+
+    def withdraw(self, ats_id: str, replacement_ats_id: str) -> dict:
+        return withdraw_job(
+            self.connection,
+            self.ids[ats_id],
+            replacement_job_id=self.ids[replacement_ats_id],
+            evidence="Moved to Archived as Withdrawn",
+            policies=self.policies,
+            run_id=self.run_id,
+            submit_applications=True,
+        )
+
+    def test_swap_needs_a_cap_on_active_applications(self) -> None:
+        (self.policy_root / "policies.json").write_text(
+            '{"policies": [{"id": "x", "company_names": ["X"], "handling": "auto_apply", '
+            '"documentation": "amazon.md", "application_limit": {"description": "d"}, '
+            '"swap": {"min_fit_gain": 10, "max_withdrawals_per_run": 1}}]}',
+            encoding="utf-8",
+        )
+        with self.assertRaises(ValueError):
+            load_company_policies(self.cfg["company_policies_path"])
+
+    def test_plan_pairs_the_weakest_application_with_the_strongest_queued_job(self) -> None:
+        plan = self.plan(self.active("1", "2", "3"))
+        self.assertEqual(plan["free_slots"], 0)
+        self.assertEqual(
+            [(pair["withdraw"]["fit_score"], pair["replacement"]["fit_score"]) for pair in plan["pairs"]],
+            [(76, 93)],
+        )
+
+    def test_plan_keeps_slots_it_must_not_touch(self) -> None:
+        # Recruiter contact on 1; 2 has moved past plain submitted; an application the ledger never sent holds a slot.
+        active = self.active("3", "unknown") + self.active("2", status="UNDER_REVIEW") + self.active("1")
+        self.assertEqual(self.plan(active, keep=["1"])["pairs"], [])
+        # A rejection archived 1: a slot is free, so nothing is withdrawn.
+        plan = self.plan(self.active("2", "3"))
+        self.assertEqual((plan["free_slots"], plan["pairs"]), (1, []))
+
+    def test_withdraw_frees_the_slot_once_per_run(self) -> None:
+        self.connection.execute(
+            "INSERT INTO company_limits(company, company_key, reported_at, message) VALUES ('Amazon', 'policy:amazon', ?, 'cap')",
+            (NOW.isoformat(),),
+        )
+        withdrawn = self.withdraw("1", "4")
+        self.assertEqual((withdrawn["status"], withdrawn["limits_cleared"]), ("withdrawn", 1))
+        self.assertEqual(active_limits(self.connection, self.policies), {})
+        self.assertEqual(self.plan(self.active("2", "3", "x"))["withdrawals_left_this_run"], 0)
+        with self.assertRaisesRegex(ValueError, "already withdrew"):
+            self.withdraw("2", "5")
+        report = outcome_report(self.connection, run_id=self.run_id, policies=self.policies)
+        self.assertEqual(
+            [(job["fit_score"], job["replacement_fit_score"]) for job in report["withdrawn"]], [(76, 93)]
+        )
+        body = digest_payload(self.connection, self.cfg, self.run_id, now=NOW)["email"]["body"]
+        self.assertIn("(fit 76) for", body)
+
+    def test_withdraw_refuses_a_small_gain_or_a_non_submitted_job(self) -> None:
+        with self.assertRaisesRegex(ValueError, "not 10 above"):
+            self.withdraw("3", "4")
+        with self.assertRaisesRegex(ValueError, "only submitted"):
+            self.withdraw("4", "5")
 
 
 if __name__ == "__main__":

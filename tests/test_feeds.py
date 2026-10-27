@@ -19,6 +19,7 @@ from job_agent.feeds import (
     SUPPORTED_ATS,
     amazon_posted_at,
     fetch_feeds,
+    greenhouse_location_metadata,
     load_registry,
     run_fetch_feeds,
     ssl_context,
@@ -235,15 +236,39 @@ class FeedParserTests(unittest.TestCase):
         routes: dict[str, object] = {
             f"{WORKDAY_API}/jobs#offset=0": recent_page,
             f"{WORKDAY_API}/jobs#offset=20": old_page,
-            f"{WORKDAY_API}/jobs#offset=40": recent_page,
+            f"{WORKDAY_API}/jobs#offset=40": old_page,
+            f"{WORKDAY_API}/jobs#offset=60": recent_page,
         }
         routes.update({f"{WORKDAY_API}/job/US-CA/MLE_{index}": {"jobPostingInfo": {"jobDescription": "x", "location": "US, CA, Santa Clara", "jobReqId": f"JR{index}"}} for index in range(20)})
 
         candidates, stats, fetch = run_board(WORKDAY, routes, max_pages=10)
 
         offsets = [payload["offset"] for url, payload in fetch.calls if url.endswith("/jobs")]
-        self.assertEqual(offsets, [0, 20], "walk stops after the first page with nothing recent")
+        self.assertEqual(offsets, [0, 20, 40], "walk stops after two pages in a row with nothing recent")
         self.assertEqual(stats["kept"], 20)
+
+    def test_workday_walk_continues_past_one_stale_first_page(self) -> None:
+        stale = {"jobPostings": [{"title": "Machine Learning Engineer Old", "externalPath": "/job/US-CA/MLE_old", "locationsText": "US, CA, Santa Clara", "postedOn": "Posted 30+ Days Ago", "bulletFields": ["JROLD"]}] * 20}
+        fresh = {"jobPostings": [{"title": "Machine Learning Engineer", "externalPath": "/job/US-CA/MLE_new", "locationsText": "US, CA, Santa Clara", "postedOn": "Posted Today", "bulletFields": ["JRNEW"]}]}
+        routes: dict[str, object] = {
+            f"{WORKDAY_API}/jobs#offset=0": stale,
+            f"{WORKDAY_API}/jobs#offset=20": fresh,
+            f"{WORKDAY_API}/job/US-CA/MLE_new": {"jobPostingInfo": {"jobDescription": "x", "location": "US, CA, Santa Clara", "jobReqId": "JRNEW"}},
+        }
+        candidates, stats, _ = run_board(WORKDAY, routes, max_pages=10)
+        self.assertEqual([c["ats_job_id"] for c in candidates], ["JRNEW"])
+
+    def test_greenhouse_location_custom_fields(self) -> None:
+        places, workplace = greenhouse_location_metadata(
+            {"metadata": [
+                {"name": "Job Posting Location", "value": ["San Francisco, CA", "New York, NY"]},
+                {"name": "Workplace Type", "value": "Remote"},
+                {"name": "Location Type", "value": "On-Site"},
+                {"name": "Department", "value": "AI"},
+            ]}
+        )
+        self.assertEqual(places, ["San Francisco, CA", "New York, NY"])
+        self.assertEqual(workplace, ["Remote", "On-Site"])
 
     def test_workday_detail_failure_keeps_the_posting(self) -> None:
         routes = standard_routes()
@@ -487,6 +512,10 @@ class TitleFilterTests(unittest.TestCase):
             "Senior Applied Scientist, Risk",
             "Data Scientist, Product",
             "Forward Deployed Engineer (AI Enablement)",
+            "Staff Data Scientist, Marketing Analytics",
+            "Senior Software Engineer - Computer Vision",
+            "Research Engineer, Robot Learning",
+            "Research Scientist / Research Engineer, Search Integrity",
         ):
             self.assertTrue(title_matches(title, CONFIG), title)
         for title in (

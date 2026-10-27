@@ -222,6 +222,10 @@ NON_ENGINEERING_TITLE_PATTERN = re.compile(
 )
 
 
+# A data scientist title is the role itself, whatever team it serves ("Data Scientist, Marketing").
+DATA_SCIENTIST_PATTERN = re.compile(r"\bdata scientist\b")
+
+
 def title_matches(title: str, config: dict[str, Any]) -> bool:
     """True when the title reads as an ML/Data individual-contributor role.
 
@@ -235,7 +239,9 @@ def title_matches(title: str, config: dict[str, Any]) -> bool:
         return False
     if any(term in lower for term in MANAGEMENT_TITLE_TERMS):
         return False
-    if NON_ENGINEERING_TITLE_PATTERN.search(lower):
+    if NON_ENGINEERING_TITLE_PATTERN.search(lower) and (
+        "manager" in lower or not DATA_SCIENTIST_PATTERN.search(lower)
+    ):
         return False
     if ML_SIGNAL_PATTERN.search(lower):
         return True
@@ -367,6 +373,24 @@ class BoardResult:
 # --- Per-ATS fetchers ------------------------------------------------------------
 
 
+def greenhouse_location_metadata(job: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """Values of a Greenhouse job's location and workplace-type custom fields."""
+    places: list[str] = []
+    workplace: list[str] = []
+    for item in job.get("metadata") or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").lower()
+        raw = item.get("value")
+        values = [str(value) for value in (raw if isinstance(raw, list) else [raw]) if isinstance(value, str) and value.strip()]
+        # "Location Type" / "Workplace Type" say how the work is done, not where.
+        if any(word in name for word in ("type", "workplace", "remote")):
+            workplace.extend(values)
+        elif "location" in name:
+            places.extend(values)
+    return places, workplace
+
+
 def fetch_greenhouse(
     entry: dict[str, Any], config: dict[str, Any], now: datetime, fetch: Fetch, **_: Any
 ) -> BoardResult:
@@ -377,19 +401,18 @@ def fetch_greenhouse(
     for job in payload.get("jobs") or []:
         posted_at = parse_datetime(job.get("first_published") or job.get("updated_at"))
         location_name = str((job.get("location") or {}).get("name") or "")
+        # Many boards keep the real place in custom fields ("Job Posting Location") and the
+        # remote option in "Workplace Type"; the list endpoint has no offices.
+        metadata_places, workplace = greenhouse_location_metadata(job)
         location = join_locations(
             [location_name]
             + [
-                office.get("name")
-                for office in job.get("offices") or []
-                if str(office.get("name") or "") not in location_name
+                name
+                for name in [office.get("name") for office in job.get("offices") or []] + metadata_places
+                if name and str(name) not in location_name
             ]
         )
-        remote = any(
-            "remote" in str(item.get("value") or "").lower()
-            for item in job.get("metadata") or []
-            if isinstance(item, dict) and "location" in str(item.get("name") or "").lower()
-        )
+        remote = any("remote" in value.lower() for value in metadata_places + workplace)
         def build(job=job, location=location, remote=remote, posted_at=posted_at) -> dict[str, Any]:
             detail = fetch(f"{board_url}/{urllib.parse.quote(str(job.get('id')))}", None)
             return make_candidate(
@@ -514,6 +537,7 @@ def fetch_workday(
     result = BoardResult(entry)
     api_base, site_base = workday_urls(entry)
     survivors: list[tuple[dict[str, Any], datetime]] = []
+    stale_pages = 0
     for page in range(max_pages):
         payload = fetch(
             f"{api_base}/jobs",
@@ -529,7 +553,10 @@ def fetch_workday(
                 page_has_recent = True
             if result.prefilter(config, now, str(posting.get("title") or ""), posted_at):
                 survivors.append((posting, posted_at))
-        if not page_has_recent or len(postings) < WORKDAY_PAGE_SIZE:
+        # Page 1 is not always newest-first (CrowdStrike's starts with weeks-old postings and
+        # lists "Posted Today" from offset 23), so stop only after two pages with nothing recent.
+        stale_pages = 0 if page_has_recent else stale_pages + 1
+        if stale_pages >= 2 or len(postings) < WORKDAY_PAGE_SIZE:
             break
 
     def build(item: tuple[dict[str, Any], datetime]) -> dict[str, Any]:
