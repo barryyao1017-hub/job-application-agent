@@ -23,6 +23,7 @@ from .core import (
     finish_run,
     ingest_candidates,
     latest_running_run,
+    recency_window_hours,
     load_company_policies,
     load_config,
     mark_notification,
@@ -35,6 +36,7 @@ from .core import (
     score_jobs,
     submit_job,
     swap_plan,
+    utc_now,
     withdraw_job,
 )
 from .feeds import DEFAULT_QUERIES, DEFAULT_REGISTRY_PATH, run_fetch_feeds
@@ -178,8 +180,9 @@ def main(argv: list[str] | None = None) -> int:
         config = load_config(args.config)
         connection = connect_db(args.db)
         if args.command == "fetch-feeds":
+            window = recency_window_hours(connection, config, utc_now())
             result = run_fetch_feeds(
-                config,
+                {**config, "recency_hours": window},
                 registry_path=args.registry,
                 out_path=args.out,
                 queries=args.queries,
@@ -188,6 +191,7 @@ def main(argv: list[str] | None = None) -> int:
             run_id = create_run(connection, args.run_id)
             summary = record_discovery(connection, run_id, result["boards"])
             result["run_id"] = run_id
+            result["recency_hours"] = window
             result["companies_checked"] = summary["companies_checked"]
             emit(result)
         elif args.command == "discover":

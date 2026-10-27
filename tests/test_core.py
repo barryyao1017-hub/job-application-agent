@@ -26,6 +26,7 @@ from job_agent.core import (
     mark_notification,
     match_company_policy,
     outcome_report,
+    recency_window_hours,
     record_discovery,
     recover_stale_claims,
     requeue_jobs,
@@ -277,14 +278,29 @@ class CoreTests(unittest.TestCase):
 
     def test_state_abbreviation_location_terms(self) -> None:
         cfg = {**self.cfg, "preferred_location_terms": [", ca", ", wa"]}
-        for location in ("San Mateo, CA", "Kirkland, WA"):
+        for location in ("San Mateo, CA", "Kirkland, WA", "US-CA-Menlo Park", "USA-WA-Seattle"):
             with self.subTest(location=location):
                 result = score_candidate(candidate(location=location), cfg, now=NOW)
                 self.assertIsNone(result.skip_reason)
-        for location in ("Toronto, Canada", "Vancouver, Washington DC area, Wakanda"):
+        for location in ("Toronto, Canada", "Vancouver, Washington DC area, Wakanda", "US-NY-New York"):
             with self.subTest(location=location):
                 result = score_candidate(candidate(location=location), cfg, now=NOW)
                 self.assertIn("location", result.skip_reason or "")
+
+    def test_recency_window_reaches_back_to_the_previous_discovery(self) -> None:
+        self.assertEqual(recency_window_hours(self.connection, self.cfg, NOW), 24, "no earlier discovery")
+        earlier = create_run(self.connection, "earlier")
+        self.connection.execute("UPDATE runs SET started_at=? WHERE id=?", ((NOW - timedelta(hours=30)).isoformat(), earlier))
+        record_discovery(self.connection, earlier, [{"company": "Acme", "ats": "greenhouse", "fetched": 5, "kept": 1, "errors": []}])
+        self.assertEqual(recency_window_hours(self.connection, self.cfg, NOW), 33)
+        self.assertEqual(recency_window_hours(self.connection, self.cfg, NOW + timedelta(days=5)), 72, "capped at three days")
+        # A 28-hour-old posting from that gap survives scoring, measured at its run's start.
+        late = create_run(self.connection, "late")
+        self.connection.execute("UPDATE runs SET started_at=? WHERE id=?", (NOW.isoformat(), late))
+        ingest_candidates(self.connection, [candidate(posted_at=(NOW - timedelta(hours=28)).isoformat())], late)
+        score_jobs(self.connection, self.cfg, late)
+        status = self.connection.execute("SELECT status FROM jobs WHERE run_id='late'").fetchone()["status"]
+        self.assertEqual(status, "queued")
 
     def test_atomic_claim_and_recovery(self) -> None:
         ingest_candidates(self.connection, [candidate()], self.run_id)

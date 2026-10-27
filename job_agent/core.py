@@ -56,7 +56,8 @@ MANAGEMENT_TITLE_TERMS = (
 )
 INTERNSHIP_TITLE_PATTERN = re.compile(r"\b(?:intern|internship|co-?op)\b")
 ML_SIGNAL_PATTERN = re.compile(
-    r"\b(?:ai|ml|machine learning|artificial intelligence|data science)\b"
+    r"\b(?:ai|ml|machine learning|artificial intelligence|data science|deep learning|computer vision|"
+    r"nlp|natural language processing|llms?|robot learning|research (?:scientist|engineer))\b"
 )
 CITIZENSHIP_TERMS = (
     "u.s. citizen required",
@@ -438,6 +439,8 @@ WORK_MODE_PATTERN = re.compile(
     r"optional|option|or|and|in|the|based|location|locations|multiple)\b|[^a-z]"
 )
 REMOTE_TERMS = ("remote", "virtual")
+# Workday and Snowflake write "US-CA-Menlo Park"; read the state code as ", CA".
+HYPHENATED_STATE_PATTERN = re.compile(rf"\b(US|USA)-({US_STATE_CODES})\b")
 WASHINGTON_DC_PATTERN = re.compile(r"\bwashington,?\s*d\.?\s?c\b\.?|\bdistrict of columbia\b")
 
 
@@ -461,6 +464,7 @@ def location_matches(location: str, remote: bool, config: dict[str, Any]) -> boo
     for original in (piece.strip() for piece in re.split(r"[|;]", location)):
         if not original:
             continue
+        original = HYPHENATED_STATE_PATTERN.sub(r"\1, \2,", original)
         part = original.lower()
         us = bool(US_LOCATION_PATTERN.search(part) or US_STATE_CODE_PATTERN.search(original))
         if NON_US_LOCATION_PATTERN.search(part) and not us:
@@ -745,6 +749,33 @@ def discovery_summary(connection: sqlite3.Connection, run_id: str) -> dict[str, 
         },
         "companies_with_errors": with_errors,
     }
+
+
+MAX_RECENCY_WINDOW_HOURS = 72
+
+
+def recency_window_hours(connection: sqlite3.Connection, config: dict[str, Any], before: datetime) -> int:
+    """Hours of postings a discovery at ``before`` must cover: back to the previous discovery, plus 2h.
+
+    At least ``recency_hours``; at most three days, so a long gap does not flood the queue.
+    The daily run drifts (07:00 one day, 13:00 after a missed run the next), and a fixed 24h
+    window then leaves hours that no run ever looks at.
+    """
+    base = int(config["recency_hours"])
+    row = connection.execute(
+        """
+        SELECT MAX(runs.started_at) AS started_at FROM runs
+        WHERE runs.started_at < ? AND EXISTS (
+            SELECT 1 FROM run_boards WHERE run_boards.run_id = runs.id AND run_boards.fetched > 0
+        )
+        """,
+        (iso_utc(before),),
+    ).fetchone()
+    previous = parse_datetime(row["started_at"]) if row else None
+    if previous is None:
+        return base
+    gap_hours = int((before - previous).total_seconds() // 3600) + 1
+    return max(base, min(MAX_RECENCY_WINDOW_HOURS, gap_hours + 2))
 
 
 def ingest_candidates(
@@ -1073,9 +1104,20 @@ def score_jobs(
     scored: list[str] = []
     skipped: dict[str, str] = {}
     manual_review: dict[str, dict[str, Any]] = {}
+    # Without an explicit ``now``, a job's age is measured when its run discovered it, against the
+    # window that discovery covered, so scoring hours later does not drop what discovery kept.
+    windows: dict[str, tuple[dict[str, Any], datetime | None]] = {}
     for row in rows:
         candidate = dict(row)
-        result = score_candidate(candidate, config, now=now)
+        if now is None and row["run_id"] not in windows:
+            run = connection.execute("SELECT started_at FROM runs WHERE id=?", (row["run_id"],)).fetchone()
+            started = parse_datetime(run["started_at"]) if run else None
+            windows[row["run_id"]] = (
+                {**config, "recency_hours": recency_window_hours(connection, config, started)} if started else config,
+                started,
+            )
+        run_config, reference = windows.get(row["run_id"], (config, now))
+        result = score_candidate(candidate, run_config, now=reference)
         if result.skip_reason:
             connection.execute(
                 """
