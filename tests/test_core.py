@@ -34,6 +34,7 @@ from job_agent.core import (
     recover_stale_claims,
     requeue_jobs,
     resume_text,
+    run_report_doc,
     score_candidate,
     score_jobs,
     set_tailored_resume,
@@ -455,6 +456,58 @@ class CoreTests(unittest.TestCase):
         self.assertIn("Submitted 1 of 2 application attempts (50.0%)", body)
         self.assertIn("Blocked — captcha: 1", body)
         self.assertNotIn("No applications were submitted", body)
+
+    def test_run_report_doc_merges_ledger_and_notes(self) -> None:
+        ingest_candidates(
+            self.connection,
+            [candidate(), candidate(application_url="https://job-boards.greenhouse.io/acme/jobs/222222")],
+            self.run_id,
+        )
+        score_jobs(self.connection, self.cfg, self.run_id, now=NOW)
+        first = claim_next(self.connection, "w", run_id=self.run_id)
+        block_job(self.connection, first["id"], "w", "technical_failure", "Lost the tab")
+        requeue_jobs(self.connection, [first["id"]])
+        retry = claim_next(self.connection, "w", run_id=self.run_id)
+        self.assertEqual(retry["id"], first["id"])
+        submit_job(
+            self.connection,
+            retry["id"],
+            "w",
+            confirmation_url=retry["application_url"],
+            evidence="Application received",
+            resume_verified=True,
+            submit_applications=True,
+        )
+        second = claim_next(self.connection, "w", run_id=self.run_id)
+        block_job(self.connection, second["id"], "w", "captcha", "CAPTCHA shown")
+
+        result = run_report_doc(self.connection, self.cfg, self.run_id, now=NOW)
+        doc = result["doc"]
+        self.assertEqual(doc["rate"]["run"], {"attempts": 3, "submitted": 1, "percent": 33.3})
+        self.assertEqual([a["outcome"] for a in doc["attempts"]], ["blocked", "submitted", "blocked"])
+        retried = next(app for app in doc["applications"] if app["job_id"] == first["id"])
+        self.assertEqual((retried["status"], retried["attempts"]), ("submitted", ["blocked", "submitted"]))
+        # The retried job's first block has no category left in the ledger; the later block keeps its own.
+        self.assertEqual([b["category"] for b in doc["blockers"]], [None, "captcha"])
+        self.assertEqual(result["warnings"], [])
+        self.assertNotIn("Lost the tab", str(doc))
+        self.assertNotIn("CAPTCHA shown", str(doc))
+
+        notes = {
+            "headline": "Submitted 1 of 3.",
+            "job_notes": {first["id"]: "Retried."},
+            "blockers": [{"company": "Acme", "title": first["title"], "category": "technical_failure", "root_cause": "Tab lost", "todo": "JOB-1"}],
+            "todos": [{"id": "JOB-1", "owner": "claude", "title": "Keep tabs open"}],
+        }
+        result = run_report_doc(self.connection, self.cfg, self.run_id, notes, now=NOW)
+        self.assertEqual(result["doc"]["headline"], "Submitted 1 of 3.")
+        self.assertEqual(next(app["note"] for app in result["doc"]["applications"] if app["job_id"] == first["id"]), "Retried.")
+        self.assertEqual(result["doc"]["blockers"], notes["blockers"])
+        self.assertEqual(result["warnings"], ["run-notes lists 1 blockers; the ledger has 2 blocked attempts"])
+        with self.assertRaisesRegex(ValueError, "Unknown run-notes fields: email"):
+            run_report_doc(self.connection, self.cfg, self.run_id, {"email": []}, now=NOW)
+        with self.assertRaisesRegex(ValueError, "run-notes todos must be a list"):
+            run_report_doc(self.connection, self.cfg, self.run_id, {"todos": {}}, now=NOW)
 
     def test_run_report_and_digest_count_jobs_applied_to_in_the_run(self) -> None:
         ingest_candidates(self.connection, [candidate()], self.run_id)

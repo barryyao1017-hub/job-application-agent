@@ -1,0 +1,558 @@
+<title>Job Run Reports</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Run sheet: one column of ledger-style sections, summary first; wide screens pair the small sections. */
+:root {
+  --bg: #f4f6f9;
+  --surface: #ffffff;
+  --ink: #17202b;
+  --muted: #5a6575;
+  --line: #dbe1e9;
+  --accent: #2c56c9;
+  --accent-soft: #e6ecfb;
+  --ok: #19784f;
+  --ok-bg: #e2f3ea;
+  --warn: #9a6512;
+  --warn-bg: #fbf0dc;
+  --bad: #b33a33;
+  --bad-bg: #fbe6e4;
+  --hold: #5d4fb0;
+  --hold-bg: #ece9fa;
+  --font-display: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --font-body: "IBM Plex Sans", -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e131a; --surface: #151c26; --ink: #e5e9ef; --muted: #98a3b3; --line: #253041;
+    --accent: #84a3ff; --accent-soft: #1c2a4d;
+    --ok: #4cc48c; --ok-bg: #12301f; --warn: #e3ab4f; --warn-bg: #352610;
+    --bad: #f07a71; --bad-bg: #3a1a18; --hold: #ab9ff0; --hold-bg: #251f45;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e131a; --surface: #151c26; --ink: #e5e9ef; --muted: #98a3b3; --line: #253041;
+  --accent: #84a3ff; --accent-soft: #1c2a4d;
+  --ok: #4cc48c; --ok-bg: #12301f; --warn: #e3ab4f; --warn-bg: #352610;
+  --bad: #f07a71; --bad-bg: #3a1a18; --hold: #ab9ff0; --hold-bg: #251f45;
+  color-scheme: dark;
+}
+body { background: var(--bg); color: var(--ink); font: 15px/1.5 var(--font-body); }
+.wrap {
+  max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 32px;
+  padding-block: 28px 56px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+a { color: var(--accent); text-underline-offset: 2px; }
+a:focus-visible, button:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.top { display: flex; flex-direction: column; gap: 10px; }
+.eyebrow { font: 500 12px/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.titlerow { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 12px; }
+h1 { margin: 0; font: 700 clamp(30px, 6vw, 44px)/1.05 var(--font-display); letter-spacing: .005em; text-wrap: balance; }
+select {
+  font: 500 14px var(--font-body); color: var(--ink); background: var(--surface);
+  border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; max-width: 100%;
+}
+.meta { margin: 0; font: 13px/1.5 var(--font-mono); color: var(--muted); }
+.headline { margin: 4px 0 0; font-size: 17px; line-height: 1.45; max-width: 68ch; text-wrap: pretty; }
+
+.report { display: flex; flex-direction: column; gap: 32px; }
+.state { padding: 28px 20px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); max-width: 60ch; }
+
+.figures {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px;
+  background: var(--line); border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
+}
+.fig { background: var(--surface); padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.label { font: 500 11px/1.2 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.big { font: 600 42px/1 var(--font-display); font-variant-numeric: tabular-nums; margin-top: 6px; }
+.big small { font-size: 22px; color: var(--muted); font-weight: 500; }
+.sub { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+section { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+h2 { margin: 0; display: flex; align-items: baseline; gap: 10px; font: 600 22px/1.1 var(--font-display); letter-spacing: .01em; }
+h2 .count { font: 500 12px var(--font-mono); color: var(--muted); }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 32px; }
+.empty { margin: 0; color: var(--muted); font-size: 14px; }
+
+.strip { display: flex; flex-wrap: wrap; gap: 4px; }
+.cell { width: 22px; height: 30px; border: 0; border-radius: 3px; padding: 0; cursor: pointer; background: var(--line); }
+.cell[data-s="submitted"] { background: var(--ok); }
+.cell[data-s="blocked"] { background: var(--bad); }
+.cell[data-s="ready_for_review"] { background: var(--warn); }
+.cell[data-s="abandoned"], .cell[data-s="claimed"] { background: var(--muted); }
+.cell[aria-pressed="true"] { outline: 2px solid var(--ink); outline-offset: 2px; }
+.caption { font-size: 13px; color: var(--muted); min-height: 1.5em; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+.needs { background: var(--accent-soft); border-radius: 8px; padding: 16px 18px; }
+.needs ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.needs li { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+
+.list { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+.list > li { padding: 12px 0; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.row1 { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.co { font-weight: 600; }
+.role { min-width: 0; overflow-wrap: anywhere; }
+.small { font-size: 13px; color: var(--muted); }
+.mono { font-family: var(--font-mono); font-size: 12px; }
+.note { font-size: 14px; max-width: 72ch; }
+
+.pill {
+  font: 500 11px/1 var(--font-mono); letter-spacing: .04em; text-transform: uppercase;
+  padding: 4px 7px; border-radius: 4px; white-space: nowrap; background: var(--line); color: var(--ink);
+}
+.pill[data-tone="ok"] { background: var(--ok-bg); color: var(--ok); }
+.pill[data-tone="bad"] { background: var(--bad-bg); color: var(--bad); }
+.pill[data-tone="warn"] { background: var(--warn-bg); color: var(--warn); }
+.pill[data-tone="hold"] { background: var(--hold-bg); color: var(--hold); }
+.pill[data-tone="accent"] { background: var(--accent); color: var(--surface); }
+.todo { font: 500 12px var(--font-mono); color: var(--accent); white-space: nowrap; }
+
+.ats { display: grid; grid-template-columns: minmax(84px, auto) 1fr auto; gap: 8px 12px; align-items: center; }
+.ats .name { font: 500 13px var(--font-mono); }
+.bar { height: 10px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.bar > i { display: block; height: 100%; background: var(--ok); }
+.ats .val { font: 500 13px var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
+
+.kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 12px; }
+.kv .big { font-size: 30px; margin-top: 2px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font-size: 13px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); }
+.chip b { font-weight: 600; font-variant-numeric: tabular-nums; }
+details summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+details p { font-size: 13px; color: var(--muted); margin: 8px 0 0; }
+
+.history { display: flex; gap: 6px; align-items: flex-end; overflow-x: auto; padding-bottom: 4px; }
+.hbar {
+  display: flex; flex-direction: column; align-items: center; gap: 4px; border: 0; background: none;
+  padding: 0; cursor: pointer; color: var(--muted); font: 500 11px var(--font-mono); flex: 0 0 auto; width: 44px;
+}
+.hbar .col { width: 26px; height: 80px; background: var(--line); border-radius: 3px; display: flex; align-items: flex-end; overflow: hidden; }
+.hbar .col i { display: block; width: 100%; background: var(--accent); }
+.hbar[aria-current="true"] { color: var(--ink); }
+.hbar[aria-current="true"] .col { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+footer { font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 14px; }
+@media (prefers-reduced-motion: no-preference) { .bar > i, .hbar .col i { transition: width .3s ease, height .3s ease; } }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div class="eyebrow">Job application pipeline · daily run</div>
+    <div class="titlerow">
+      <h1 id="run-title">Job Run Reports</h1>
+      <select id="run-pick" aria-label="Choose a run" hidden></select>
+    </div>
+    <p class="meta" id="run-meta"></p>
+    <p class="headline" id="headline" hidden></p>
+  </header>
+
+  <div class="state" id="state">Loading run reports. Each daily run adds its report here when it finishes.</div>
+
+  <main id="report" class="report" hidden>
+    <div class="figures">
+      <div class="fig"><span class="label">Submitted this run</span><span class="big" id="f-run">—</span><span class="sub" id="f-run-sub"></span></div>
+      <div class="fig"><span class="label">All-time rate</span><span class="big" id="f-all">—</span><span class="sub" id="f-all-sub"></span></div>
+      <div class="fig"><span class="label">Postings scanned</span><span class="big" id="f-scan">—</span><span class="sub" id="f-scan-sub"></span></div>
+      <div class="fig"><span class="label">Deferred by limits</span><span class="big" id="f-def">—</span><span class="sub" id="f-def-sub"></span></div>
+    </div>
+
+    <section aria-labelledby="h-attempts">
+      <h2 id="h-attempts">Attempts in claim order <span class="count" id="c-attempts"></span></h2>
+      <div class="strip" id="strip"></div>
+      <div class="caption" id="strip-caption">Tap a block to see the attempt.</div>
+      <div class="legend">
+        <span><i style="background:var(--ok)"></i>Submitted</span>
+        <span><i style="background:var(--bad)"></i>Blocked</span>
+        <span><i style="background:var(--warn)"></i>Stopped at Review</span>
+        <span><i style="background:var(--muted)"></i>Abandoned</span>
+      </div>
+    </section>
+
+    <section class="needs" aria-labelledby="h-needs">
+      <h2 id="h-needs">Needs you <span class="count" id="c-needs"></span></h2>
+      <ul id="needs"></ul>
+      <span class="small"><a href="https://claude.ai/artifact/WSphNhTrrHRRg3DVgEKDhi">Open the to-do list</a></span>
+    </section>
+
+    <section aria-labelledby="h-apps">
+      <h2 id="h-apps">Applications <span class="count" id="c-apps"></span></h2>
+      <ul class="list" id="apps"></ul>
+    </section>
+
+    <section aria-labelledby="h-blockers">
+      <h2 id="h-blockers">Blockers and root causes <span class="count" id="c-blockers"></span></h2>
+      <ul class="list" id="blockers"></ul>
+    </section>
+
+    <div class="grid2">
+      <section aria-labelledby="h-ats">
+        <h2 id="h-ats">By ATS</h2>
+        <div class="ats" id="ats"></div>
+      </section>
+      <section aria-labelledby="h-disc">
+        <h2 id="h-disc">Discovery</h2>
+        <div class="kv">
+          <div><span class="label">Companies</span><div class="big" id="d-companies">—</div></div>
+          <div><span class="label">Kept</span><div class="big" id="d-kept">—</div></div>
+          <div><span class="label">New jobs</span><div class="big" id="d-new">—</div></div>
+          <div><span class="label">Board errors</span><div class="big" id="d-errors">—</div></div>
+        </div>
+        <span class="label">Matching roles by company</span>
+        <div class="chips" id="d-matches"></div>
+        <p class="small" id="d-error-list" hidden></p>
+        <details><summary id="d-all-summary">Every company checked</summary><p id="d-all"></p></details>
+      </section>
+    </div>
+
+    <div class="grid2">
+      <section aria-labelledby="h-limits">
+        <h2 id="h-limits">Limits and swaps</h2>
+        <ul class="list" id="limits"></ul>
+      </section>
+      <section aria-labelledby="h-mail">
+        <h2 id="h-mail">Email <span class="count" id="c-mail"></span></h2>
+        <ul class="list" id="mail"></ul>
+      </section>
+    </div>
+
+    <section aria-labelledby="h-tailor">
+      <h2 id="h-tailor">Tailored résumés <span class="count" id="c-tailor"></span></h2>
+      <ul class="list" id="tailor"></ul>
+    </section>
+
+    <section aria-labelledby="h-notes" id="notes-sec">
+      <h2 id="h-notes">Run notes</h2>
+      <ul class="list" id="notes"></ul>
+    </section>
+
+    <section aria-labelledby="h-hist" id="hist-sec" hidden>
+      <h2 id="h-hist">Recent runs</h2>
+      <div class="history" id="history"></div>
+      <span class="small">Bar height is the run's submission rate. Tap a run to open it.</span>
+    </section>
+
+    <footer id="footer"></footer>
+  </main>
+</div>
+
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const fmt = (n) => (typeof n === "number" ? n.toLocaleString("en-US") : "—");
+  const pct = (n) => (typeof n === "number" ? n.toFixed(1).replace(/\.0$/, "") + "%" : "—");
+  const STATUS = {
+    submitted: ["Submitted", "ok"],
+    ready_for_review: ["At Review", "warn"],
+    blocked: ["Blocked", "bad"],
+    queued: ["Deferred", "hold"],
+    claimed: ["Claimed", ""],
+    withdrawn: ["Withdrawn", ""],
+  };
+  const OUTCOME = { submitted: "Submitted", blocked: "Blocked", ready_for_review: "Stopped at Review", abandoned: "Abandoned", claimed: "Still claimed" };
+  const MAIL = { recruiter_outreach: ["Recruiter", "accent"], interview_or_assessment: ["Interview", "accent"], rejection: ["Rejection", "bad"], confirmation: ["Receipt", "ok"] };
+  const needsReply = (mail) => mail.category === "recruiter_outreach" || mail.category === "interview_or_assessment";
+  const ORDER = { blocked: 0, ready_for_review: 1, queued: 2, claimed: 3, submitted: 4, withdrawn: 5 };
+
+  let runs = [];
+  let currentId = null;
+  let selectedAttempt = null;
+
+  function el(tag, attrs, ...children) {
+    const node = document.createElement(tag);
+    for (const [key, value] of Object.entries(attrs || {})) {
+      if (value === null || value === undefined || value === false) continue;
+      if (key === "class") node.className = value;
+      else if (key === "text") node.textContent = value;
+      else node.setAttribute(key, value === true ? "" : value);
+    }
+    for (const child of children) {
+      if (child === null || child === undefined || child === false) continue;
+      node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+    }
+    return node;
+  }
+  const pill = (label, tone) => el("span", { class: "pill", "data-tone": tone || null, text: label });
+  const link = (text, url) => (typeof url === "string" && /^https:\/\//.test(url) ? el("a", { href: url, text }) : el("span", { text }));
+  const fill = (id, items, emptyText) => {
+    const box = $(id);
+    box.replaceChildren(...items);
+    if (!items.length) box.replaceChildren(el("li", {}, el("p", { class: "empty", text: emptyText })));
+  };
+
+  function longDate(date) {
+    if (!date) return "Run";
+    const d = new Date(date + "T12:00:00");
+    return isNaN(d) ? date : d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+  }
+  function shortDate(date) {
+    const d = new Date((date || "") + "T12:00:00");
+    return isNaN(d) ? (date || "") : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  }
+  function clock(iso) {
+    const d = new Date(iso || "");
+    return isNaN(d) ? "" : d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  }
+  function minutes(from, to) {
+    const ms = new Date(to || "") - new Date(from || "");
+    if (!(ms > 0)) return "";
+    const m = Math.round(ms / 60000);
+    return m < 90 ? m + " min" : (m / 60).toFixed(1) + " h";
+  }
+
+  function showState(text) {
+    $("state").textContent = text;
+    $("state").hidden = false;
+    $("report").hidden = true;
+  }
+
+  function render() {
+    if (!runs.length) {
+      $("run-pick").hidden = true;
+      $("run-title").textContent = "Job Run Reports";
+      $("run-meta").textContent = "";
+      $("headline").hidden = true;
+      showState("No run reports yet. Each daily run adds its report here when it finishes.");
+      return;
+    }
+    const run = runs.find((r) => r.id === currentId) || runs[0];
+    currentId = run.id;
+    $("state").hidden = true;
+    $("report").hidden = false;
+    renderPicker(run);
+    renderHeader(run);
+    renderFigures(run);
+    renderStrip(run);
+    renderNeeds(run);
+    renderApps(run);
+    renderBlockers(run);
+    renderAts(run);
+    renderDiscovery(run);
+    renderLimits(run);
+    renderMail(run);
+    renderTailored(run);
+    renderNotes(run);
+    renderHistory(run);
+    const commit = run.commit ? " at commit " + run.commit : "";
+    $("footer").textContent = "Numbers come from the job ledger" + commit + "; root causes, to-dos, email and notes come from the run's own report. Generated " +
+      new Date(run.generated_at || run.started_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) + ". Run " + run.run_id + ".";
+  }
+
+  function renderPicker(run) {
+    const pick = $("run-pick");
+    pick.hidden = runs.length < 2;
+    pick.replaceChildren(...runs.map((r) => {
+      const rate = r.rate && r.rate.run ? " · " + r.rate.run.submitted + "/" + r.rate.run.attempts : "";
+      return el("option", { value: r.id, selected: r.id === run.id, text: shortDate(r.date) + " " + clock(r.started_at) + rate });
+    }));
+  }
+
+  function renderHeader(run) {
+    $("run-title").textContent = longDate(run.date);
+    const parts = [];
+    if (run.started_at) parts.push("Started " + clock(run.started_at));
+    const took = minutes(run.started_at, run.finished_at || run.generated_at);
+    if (took) parts.push(took);
+    if (run.commit) parts.push("main " + run.commit);
+    parts.push(run.submit_applications ? "submitting on" : "stops at Review");
+    $("run-meta").textContent = parts.join(" · ");
+    $("headline").textContent = run.headline || "";
+    $("headline").hidden = !run.headline;
+  }
+
+  function renderFigures(run) {
+    const r = (run.rate && run.rate.run) || {};
+    const a = (run.rate && run.rate.all_time) || {};
+    const big = (id, main, minor) => $(id).replaceChildren(String(main), minor ? el("small", { text: minor }) : "");
+    big("f-run", fmt(r.submitted), r.attempts !== undefined ? " / " + fmt(r.attempts) : "");
+    $("f-run-sub").textContent = r.attempts ? pct(r.percent) + " of attempts" : "No application attempts";
+    big("f-all", pct(a.percent));
+    $("f-all-sub").textContent = a.attempts ? fmt(a.submitted) + " of " + fmt(a.attempts) + " since " + shortDate((a.since || "").slice(0, 10)) : "";
+    const d = run.discovery || {};
+    big("f-scan", fmt(d.postings_scanned));
+    $("f-scan-sub").textContent = fmt(d.companies_checked) + " companies checked";
+    const deferred = run.deferred || [];
+    const jobs = deferred.reduce((sum, g) => sum + (g.jobs || 0), 0);
+    big("f-def", fmt(jobs));
+    $("f-def-sub").textContent = deferred.length ? deferred.map((g) => g.company).join(", ") : "No company at a limit";
+  }
+
+  function renderStrip(run) {
+    const attempts = run.attempts || [];
+    $("c-attempts").textContent = attempts.length ? attempts.length + " attempts" : "";
+    selectedAttempt = null;
+    $("strip-caption").textContent = attempts.length ? "Tap a block to see the attempt." : "No attempts in this run.";
+    $("strip").replaceChildren(...attempts.map((attempt, index) => {
+      const label = "Attempt " + (index + 1) + ": " + attempt.company + ", " + (OUTCOME[attempt.outcome] || attempt.outcome);
+      const cell = el("button", { class: "cell", type: "button", "data-s": attempt.outcome, "aria-label": label, "aria-pressed": "false" });
+      const show = () => {
+        $("strip-caption").textContent = label;
+        if (selectedAttempt) selectedAttempt.setAttribute("aria-pressed", "false");
+        cell.setAttribute("aria-pressed", "true");
+        selectedAttempt = cell;
+      };
+      cell.addEventListener("click", show);
+      cell.addEventListener("mouseenter", () => { $("strip-caption").textContent = label; });
+      cell.addEventListener("focus", show);
+      return cell;
+    }));
+  }
+
+  function renderNeeds(run) {
+    const items = [];
+    for (const todo of run.todos || []) {
+      if (String(todo.owner || "").toLowerCase() !== "barry") continue;
+      items.push(el("li", {}, el("span", { class: "todo", text: todo.id || "To-do" }), el("span", { text: todo.title || "" })));
+    }
+    for (const mail of run.emails || []) {
+      if (!needsReply(mail)) continue;
+      const [label, tone] = MAIL[mail.category];
+      items.push(el("li", {}, pill(label, tone), el("span", { class: "co", text: mail.company || "" }), mail.role ? el("span", { text: mail.role }) : null, el("span", { class: "small", text: shortDate(mail.date) })));
+    }
+    for (const app of run.applications || []) {
+      if (app.status !== "ready_for_review") continue;
+      items.push(el("li", {}, pill("At Review", "warn"), el("span", { class: "co", text: app.company }), link(app.title, app.url)));
+    }
+    $("c-needs").textContent = items.length ? String(items.length) : "";
+    $("needs").replaceChildren(...items);
+    if (!items.length) $("needs").replaceChildren(el("li", {}, el("span", { class: "empty", text: "Nothing from this run needs you." })));
+  }
+
+  function renderApps(run) {
+    const apps = (run.applications || []).slice().sort((x, y) =>
+      (ORDER[x.status] ?? 9) - (ORDER[y.status] ?? 9) || (y.fit_score || 0) - (x.fit_score || 0));
+    const counts = {};
+    for (const app of apps) counts[app.status] = (counts[app.status] || 0) + 1;
+    $("c-apps").textContent = Object.entries(counts).map(([s, n]) => n + " " + ((STATUS[s] || [s])[0]).toLowerCase()).join(" · ");
+    fill("apps", apps.map((app) => {
+      const [label, tone] = STATUS[app.status] || [app.status, ""];
+      const tries = (app.attempts || []).length;
+      const meta = [app.ats, app.fit_score !== null && app.fit_score !== undefined ? "fit " + app.fit_score : null, tries > 1 ? tries + " attempts: " + app.attempts.map((o) => (OUTCOME[o] || o).toLowerCase()).join(", then ") : null].filter(Boolean).join(" · ");
+      return el("li", {},
+        el("div", { class: "row1" }, pill(label, tone), el("span", { class: "co", text: app.company }), el("span", { class: "role" }, link(app.title, app.url))),
+        el("span", { class: "small mono", text: meta }),
+        app.note ? el("span", { class: "note", text: app.note }) : null);
+    }), "No applications were attempted in this run.");
+  }
+
+  function renderBlockers(run) {
+    const blockers = run.blockers || [];
+    $("c-blockers").textContent = blockers.length ? String(blockers.length) : "";
+    fill("blockers", blockers.map((b) => el("li", {},
+      el("div", { class: "row1" }, pill(b.category ? b.category.replace(/_/g, " ") : "uncategorized", "bad"), el("span", { class: "co", text: b.company || "" }), el("span", { class: "role", text: b.title || "" }), b.todo ? el("span", { class: "todo", text: b.todo }) : null),
+      b.root_cause ? el("span", { class: "note", text: b.root_cause }) : el("span", { class: "small", text: "No root cause recorded." }))),
+      "Nothing was blocked.");
+  }
+
+  function renderAts(run) {
+    const rows = run.by_ats || [];
+    const box = $("ats");
+    if (!rows.length) { box.replaceChildren(el("p", { class: "empty", text: "No attempts to break down." })); return; }
+    box.replaceChildren(...rows.flatMap((r) => {
+      const width = r.attempts ? Math.round(100 * r.submitted / r.attempts) : 0;
+      const bar = el("div", { class: "bar", role: "img", "aria-label": r.ats + ": " + r.submitted + " of " + r.attempts + " submitted" }, el("i", { style: "width:" + width + "%" }));
+      return [el("span", { class: "name", text: r.ats }), bar, el("span", { class: "val", text: r.submitted + "/" + r.attempts })];
+    }));
+  }
+
+  function renderDiscovery(run) {
+    const d = run.discovery || {};
+    const fresh = d.new_jobs || {};
+    const newCount = Object.values(fresh).reduce((sum, n) => sum + n, 0);
+    $("d-companies").textContent = fmt(d.companies_checked);
+    $("d-kept").textContent = fmt(d.matches_kept);
+    $("d-new").textContent = fmt(newCount);
+    const errors = d.companies_with_errors || [];
+    $("d-errors").textContent = fmt(errors.length);
+    $("d-error-list").hidden = !errors.length;
+    $("d-error-list").textContent = errors.length ? "Boards with errors: " + errors.join(", ") : "";
+    const matches = Object.entries(d.companies_with_matches || {}).sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]));
+    $("d-matches").replaceChildren(...matches.map(([company, n]) => el("span", { class: "chip" }, company + " ", el("b", { text: String(n) }))));
+    if (!matches.length) $("d-matches").replaceChildren(el("span", { class: "empty", text: "No matching roles." }));
+    const all = d.companies || [];
+    $("d-all-summary").textContent = "Every company checked (" + all.length + ")";
+    $("d-all").textContent = all.join(", ");
+  }
+
+  function renderLimits(run) {
+    const items = (run.deferred || []).map((g) => el("li", {},
+      el("div", { class: "row1" }, pill(g.jobs + " deferred", "hold"), el("span", { class: "co", text: g.company }), g.until ? el("span", { class: "small", text: "until " + shortDate(g.until.slice(0, 10)) }) : el("span", { class: "small", text: "until a slot frees" })),
+      g.reason ? el("span", { class: "small", text: g.reason }) : null));
+    for (const w of run.withdrawals || []) {
+      items.push(el("li", {},
+        el("div", { class: "row1" }, pill("Swap", "accent"), el("span", { class: "co", text: w.company })),
+        el("span", { class: "note", text: "Withdrew " + w.title + " (fit " + w.fit_score + ") for " + w.replacement_title + " (fit " + w.replacement_fit_score + ", now " + String(w.replacement_status || "").replace(/_/g, " ") + ")." })));
+    }
+    fill("limits", items, "No company was at an application limit.");
+  }
+
+  function renderMail(run) {
+    const mails = (run.emails || []).slice().sort((x, y) => {
+      const rank = (m) => (needsReply(m) ? 0 : m.category === "rejection" ? 1 : 2);
+      return rank(x) - rank(y) || String(y.date || "").localeCompare(String(x.date || ""));
+    });
+    $("c-mail").textContent = mails.length ? String(mails.reduce((sum, m) => sum + (m.count || 1), 0)) + " threads" : "";
+    fill("mail", mails.map((m) => {
+      const [label, tone] = MAIL[m.category] || [m.category || "Email", ""];
+      return el("li", {}, el("div", { class: "row1" }, pill(label, tone), el("span", { class: "co", text: m.company || "" }), m.role ? el("span", { class: "role", text: m.role }) : null,
+        el("span", { class: "small", text: shortDate(m.date) + (m.count > 1 ? " · " + m.count + " threads" : "") })));
+    }), "No replies from employers in the last 14 days.");
+  }
+
+  function renderTailored(run) {
+    const rows = run.tailored || [];
+    $("c-tailor").textContent = rows.length ? String(rows.length) : "";
+    fill("tailor", rows.map((t) => el("li", {},
+      el("div", { class: "row1" }, pill(t.status || "", /submit/.test(t.status || "") ? "ok" : /defer/.test(t.status || "") ? "hold" : ""), el("span", { class: "co", text: t.company || "" }), el("span", { class: "role", text: t.title || "" })),
+      t.changes ? el("span", { class: "note", text: t.changes }) : null)), "No résumé was tailored in this run.");
+  }
+
+  function renderNotes(run) {
+    const notes = run.notes || [];
+    $("notes-sec").hidden = !notes.length;
+    $("notes").replaceChildren(...notes.map((n) => el("li", {}, el("span", { class: "note", text: n }))));
+  }
+
+  function renderHistory(run) {
+    const recent = runs.slice(0, 14).reverse();
+    $("hist-sec").hidden = recent.length < 2;
+    $("history").replaceChildren(...recent.map((r) => {
+      const rate = r.rate && r.rate.run && typeof r.rate.run.percent === "number" ? r.rate.run.percent : 0;
+      const label = shortDate(r.date) + ": " + (r.rate && r.rate.run ? r.rate.run.submitted + " of " + r.rate.run.attempts + " submitted" : "no attempts");
+      const button = el("button", { class: "hbar", type: "button", "aria-label": label, "aria-current": r.id === run.id ? "true" : "false" },
+        el("span", { text: pct(rate) }), el("span", { class: "col" }, el("i", { style: "height:" + Math.max(2, Math.round(rate)) + "%" })), el("span", { text: shortDate(r.date) }));
+      button.addEventListener("click", () => { currentId = r.id; render(); window.scrollTo({ top: 0 }); });
+      return button;
+    }));
+  }
+
+  $("run-pick").addEventListener("change", (event) => { currentId = event.target.value; render(); });
+
+  (async function start() {
+    const db = window.claude && window.claude.use ? await window.claude.use("db") : null;
+    if (!db) { showState("Run reports load only when this page is opened on claude.ai while signed in."); return; }
+    let firstSnapshot = true;
+    db.collection("runs").orderBy("started_at", "desc").limit(90).onSnapshot((snap) => {
+      runs = snap.docs.filter((d) => d.exists).map((d) => ({ id: d.id, ...d.data() }));
+      if (firstSnapshot) {
+        firstSnapshot = false;
+        const wanted = (location.hash || "").slice(1);
+        const match = wanted && runs.find((r) => r.date === wanted || r.id === wanted);
+        if (match) currentId = match.id;
+      }
+      render();
+    }, (error) => {
+      showState("The run reports didn't load (" + error.code + "). Reload the page to try again.");
+    });
+  })();
+})();
+</script>

@@ -37,6 +37,7 @@ from .core import (
     recover_stale_claims,
     requeue_jobs,
     resume_text,
+    run_report_doc,
     score_jobs,
     set_tailored_resume,
     submit_job,
@@ -211,6 +212,13 @@ def build_parser() -> argparse.ArgumentParser:
     digest.add_argument("--run-id", required=True)
     digest.add_argument("--sent-key")
     digest.add_argument("--failed-key")
+
+    run_doc = subparsers.add_parser(
+        "run-doc", help="Write the run's report document for the Job Run Reports artifact"
+    )
+    run_doc.add_argument("--run-id", required=True)
+    run_doc.add_argument("--notes", type=Path, help="JSON object of the run's notes (headline, blockers, todos, ...)")
+    run_doc.add_argument("--out", type=Path, required=True)
 
     recover = subparsers.add_parser("recover-stale-claims")
     recover.add_argument("--timeout-minutes", type=int)
@@ -452,6 +460,14 @@ def main(argv: list[str] | None = None) -> int:
                 emit({"notification_key": key, "sent": bool(args.sent_key)})
             else:
                 emit(digest_payload(connection, config, args.run_id))
+        elif args.command == "run-doc":
+            notes = json.loads(args.notes.read_text(encoding="utf-8")) if args.notes else None
+            if notes is not None and not isinstance(notes, dict):
+                raise ValueError("--notes must hold a JSON object")
+            result = run_report_doc(connection, config, args.run_id, notes)
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(json.dumps(result["doc"], indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            emit({"out": str(args.out), "doc_id": args.run_id, "date": result["doc"]["date"], "warnings": result["warnings"]})
         elif args.command == "recover-stale-claims":
             timeout = args.timeout_minutes or int(config.get("claim_timeout_minutes", 120))
             emit({"recovered": recover_stale_claims(connection, timeout)})
