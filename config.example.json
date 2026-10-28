@@ -9,6 +9,7 @@
   "recency_hours": 24,
   "minimum_fit_score": 80,
   "limited_company_minimum_fit_score": 90,
+  "minimum_skill_score": 10,
   "company_policies_path": ".claude/skills/company-application-policies/references/policies.json",
   "submit_applications": false,
   "max_parallel_workers": 2,

@@ -251,6 +251,23 @@ class CoreTests(unittest.TestCase):
         fit = self.connection.execute("SELECT fit_score FROM jobs").fetchone()["fit_score"]
         self.assertEqual(fit, 78)
 
+    def test_a_high_fit_with_a_low_skill_score_is_held(self) -> None:
+        ingest_candidates(self.connection, [
+            candidate(skill_score=6, skill_rationale="RTL design; unmet minimum: SystemVerilog."),
+            candidate(skill_score=10, application_url="https://job-boards.greenhouse.io/acme/jobs/2"),
+            candidate(application_url="https://job-boards.greenhouse.io/acme/jobs/3"),
+        ], self.run_id)
+        ids = {
+            row["canonical_url"].rsplit("/", 1)[-1]: row["id"]
+            for row in self.connection.execute("SELECT id, canonical_url FROM jobs")
+        }
+        # 30 + 6 + 20 + 15 + 10 = 81: above minimum_fit_score 80, but skill 6 is below 10.
+        scored = score_jobs(self.connection, {**self.cfg, "minimum_fit_score": 80}, self.run_id, now=NOW)
+        self.assertEqual(scored["held_low_skill"], [ids["123456"]])
+        self.assertEqual(sorted(scored["queued"]), sorted([ids["2"], ids["3"]]), "skill 10 and a keyword fallback queue")
+        status = self.connection.execute("SELECT status FROM jobs WHERE id=?", (ids["123456"],)).fetchone()["status"]
+        self.assertEqual(status, "scored")
+
     def test_existing_ledger_gains_skill_columns(self) -> None:
         path = self.root / "legacy.sqlite3"
         connect_db(path).close()
@@ -682,7 +699,7 @@ class ApplicationLimitTests(unittest.TestCase):
     def test_reported_limit_defers_the_company_until_cleared(self) -> None:
         ingest_candidates(
             self.connection,
-            [self.job("Amazon", 1, 20), self.job("Amazon", 2, 18), self.job("Acme", 3, 5)],
+            [self.job("Amazon", 1, 20), self.job("Amazon", 2, 18), self.job("Acme", 3, 10)],
             self.run_id,
         )
         score_jobs(self.connection, self.cfg, self.run_id, now=NOW)
