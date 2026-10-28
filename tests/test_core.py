@@ -456,6 +456,32 @@ class CoreTests(unittest.TestCase):
         self.assertIn("Blocked — captcha: 1", body)
         self.assertNotIn("No applications were submitted", body)
 
+    def test_run_report_and_digest_count_jobs_applied_to_in_the_run(self) -> None:
+        ingest_candidates(self.connection, [candidate()], self.run_id)
+        score_jobs(self.connection, self.cfg, self.run_id, now=NOW)
+        later = create_run(self.connection, "run-2")
+        job = claim_next(self.connection, "w", run_id=later)
+        submit_job(
+            self.connection,
+            job["id"],
+            "w",
+            confirmation_url=job["application_url"],
+            evidence="Application received",
+            resume_verified=True,
+            submit_applications=True,
+        )
+        report = outcome_report(self.connection, run_id=later)
+        self.assertEqual([item["job_id"] for item in report["submitted"]], [job["id"]])
+        self.assertEqual(outcome_report(self.connection, run_id=self.run_id)["submitted"], [])
+        body = digest_payload(self.connection, self.cfg, later, now=NOW)["email"]["body"]
+        self.assertIn("Discovered: 0", body)
+        self.assertIn("Submitted: 1\n", body)
+        self.assertIn(f"- submitted: Acme — {job['title']}", body)
+        self.assertNotIn("No applications were submitted", body)
+        first = digest_payload(self.connection, self.cfg, self.run_id, now=NOW)["email"]["body"]
+        self.assertIn("Submitted: 0\n", first)
+        self.assertIn("No applications were submitted", first)
+
     def test_rate_counts_each_attempt_including_retries_and_abandoned(self) -> None:
         ingest_candidates(self.connection, [candidate()], self.run_id)
         score_jobs(self.connection, self.cfg, self.run_id, now=NOW)
