@@ -1568,6 +1568,7 @@ def attempt_stats(
     *,
     run_id: str | None = None,
     since: str | None = None,
+    until: str | None = None,
 ) -> dict[str, Any]:
     """Submission rate = submitted attempts / finished attempts (each claim is one attempt)."""
     clauses = ["finished_at IS NOT NULL"]
@@ -1578,6 +1579,9 @@ def attempt_stats(
     if since:
         clauses.append("claimed_at >= ?")
         params.append(since)
+    if until:
+        clauses.append("claimed_at <= ?")
+        params.append(until)
     outcomes = {outcome: 0 for outcome in ATTEMPT_OUTCOMES}
     for row in connection.execute(
         f"SELECT outcome, COUNT(*) AS count FROM attempts WHERE {' AND '.join(clauses)} GROUP BY outcome",
@@ -2013,6 +2017,164 @@ def digest_payload(
         },
         "counts": counts,
     }
+
+
+RUN_NOTE_FIELDS: dict[str, type] = {
+    "headline": str,
+    "commit": str,
+    "job_notes": dict,
+    "blockers": list,
+    "todos": list,
+    "emails": list,
+    "tailored": list,
+    "notes": list,
+}
+RUN_DOC_MAX_BYTES = 256 * 1024
+
+
+def run_report_doc(
+    connection: sqlite3.Connection,
+    config: dict[str, Any],
+    run_id: str,
+    notes: dict[str, Any] | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """One run's report as a document for the run-report artifact.
+
+    The ledger gives the numbers, the jobs applied to and their outcomes; ``notes`` (written by the
+    orchestrator) adds what only the run knows: the headline, blocker root causes, to-dos, email
+    findings and tailoring summaries. Like the digest, it carries no contact, demographic,
+    authorization or résumé content.
+    """
+    run = connection.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
+    if run is None:
+        raise ValueError(f"Unknown run: {run_id}")
+    notes = notes or {}
+    unknown = sorted(set(notes) - set(RUN_NOTE_FIELDS))
+    if unknown:
+        raise ValueError(f"Unknown run-notes fields: {', '.join(unknown)}")
+    for field, kind in RUN_NOTE_FIELDS.items():
+        if field in notes and not isinstance(notes[field], kind):
+            raise ValueError(f"run-notes {field} must be a {kind.__name__}")
+    policies = load_company_policies(
+        config.get("company_policies_path", DEFAULT_COMPANY_POLICIES_PATH)
+    )
+    generated = now or utc_now()
+    rows = connection.execute(
+        """
+        SELECT attempts.job_id, attempts.outcome, jobs.company, jobs.title, jobs.ats,
+            jobs.fit_score, jobs.status, jobs.blocker_category, jobs.application_url
+        FROM attempts JOIN jobs ON jobs.id = attempts.job_id
+        WHERE attempts.run_id=? ORDER BY attempts.claimed_at, attempts.id
+        """,
+        (run_id,),
+    ).fetchall()
+    job_notes = notes.get("job_notes", {})
+    applications: dict[str, dict[str, Any]] = {}
+    attempts = []
+    for row in rows:
+        job = applications.setdefault(
+            row["job_id"],
+            {
+                "job_id": row["job_id"],
+                "company": row["company"],
+                "title": row["title"],
+                "ats": row["ats"],
+                "fit_score": row["fit_score"],
+                "status": row["status"],
+                "url": row["application_url"],
+                "attempts": [],
+                "note": job_notes.get(row["job_id"]),
+            },
+        )
+        job["attempts"].append(row["outcome"] or "claimed")
+        attempts.append({"job_id": row["job_id"], "company": row["company"], "outcome": row["outcome"] or "claimed"})
+    blocked = []
+    for index, row in enumerate(rows):
+        if row["outcome"] != "blocked":
+            continue
+        retried = any(later["job_id"] == row["job_id"] for later in rows[index + 1 :])
+        blocked.append(
+            {
+                "job_id": row["job_id"],
+                "company": row["company"],
+                "title": row["title"],
+                # The ledger keeps only a job's latest blocker, so a retried attempt's is unknown.
+                "category": None if retried else row["blocker_category"],
+            }
+        )
+    warnings = []
+    blockers = notes.get("blockers", blocked)
+    if len(blockers) != len(blocked):
+        warnings.append(f"run-notes lists {len(blockers)} blockers; the ledger has {len(blocked)} blocked attempts")
+    deferred: dict[str, dict[str, Any]] = {}
+    for job in deferred_jobs(connection, policies, generated):
+        group = deferred.setdefault(
+            job["company"],
+            {"company": job["company"], "jobs": 0, "until": job["until"], "reason": job["reason"]},
+        )
+        group["jobs"] += 1
+    new_jobs = {
+        row["status"]: row["count"]
+        for row in connection.execute(
+            "SELECT status, COUNT(*) AS count FROM jobs WHERE run_id=? GROUP BY status", (run_id,)
+        ).fetchall()
+    }
+    discovery = discovery_summary(connection, run_id)
+    del discovery["run_id"]
+    all_time = attempt_stats(connection, until=run["completed_at"] or iso_utc(generated))
+    run_stats = attempt_stats(connection, run_id=run_id)
+    doc = {
+        "schema": 1,
+        "run_id": run_id,
+        "date": local_run_date(run["started_at"], config),
+        "started_at": run["started_at"],
+        "finished_at": run["completed_at"],
+        "generated_at": iso_utc(generated),
+        "commit": notes.get("commit"),
+        "submit_applications": bool(config.get("submit_applications")),
+        "headline": notes.get("headline"),
+        "rate": {
+            "run": {
+                "attempts": run_stats["attempts"],
+                "submitted": run_stats["attempt_outcomes"]["submitted"],
+                "percent": run_stats["submission_rate_percent"],
+            },
+            "all_time": {
+                "attempts": all_time["attempts"],
+                "submitted": all_time["attempt_outcomes"]["submitted"],
+                "percent": all_time["submission_rate_percent"],
+                "since": all_time["rate_counted_since"],
+            },
+        },
+        "outcomes": run_stats["attempt_outcomes"],
+        "attempts": attempts,
+        "applications": list(applications.values()),
+        "blockers": blockers,
+        "by_ats": [
+            {
+                "ats": ats,
+                "attempts": group["attempts"],
+                "submitted": group["outcomes"]["submitted"],
+                "percent": group["submission_rate_percent"],
+            }
+            for ats, group in sorted(
+                attempt_breakdown(connection, "ats", run_id=run_id).items(),
+                key=lambda item: (-item[1]["attempts"], item[0]),
+            )
+        ],
+        "discovery": {**discovery, "new_jobs": new_jobs},
+        "deferred": sorted(deferred.values(), key=lambda group: (-group["jobs"], group["company"])),
+        "withdrawals": withdrawn_jobs(connection, run_id=run_id),
+        "todos": notes.get("todos", []),
+        "emails": notes.get("emails", []),
+        "tailored": notes.get("tailored", []),
+        "notes": notes.get("notes", []),
+    }
+    size = len(json.dumps(doc).encode("utf-8"))
+    if size > RUN_DOC_MAX_BYTES:
+        raise ValueError(f"Run report is {size} bytes; the artifact stores at most {RUN_DOC_MAX_BYTES}")
+    return {"doc": doc, "warnings": warnings}
 
 
 def finish_run(connection: sqlite3.Connection, run_id: str) -> None:

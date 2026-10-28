@@ -287,6 +287,20 @@ class AgentInstructionTests(unittest.TestCase):
         )
         self.assertIn("record-applied", (POLICIES_SKILL / "references" / "google.md").read_text(encoding="utf-8"))
 
+    def test_run_report_is_published_to_the_artifact(self) -> None:
+        pipeline = PIPELINE_SKILL.read_text(encoding="utf-8")
+        claude_md = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+
+        url = "https://claude.ai/artifact/AMEcW7F1bdXNjYfkziqide"
+        self.assertIn(f'1. Publish the run report to the "Job Run Reports" artifact, {url}', pipeline)
+        self.assertIn("python3 -m job_agent run-doc --run-id RUN_ID --notes artifacts/YYYY-MM-DD/run-notes.json", pipeline)
+        self.assertIn("collection `runs`, `doc_id` RUN_ID", pipeline)
+        self.assertIn(f"`Run report: {url}#YYYY-MM-DD`", pipeline)
+        self.assertIn("Start with the link to this run's page in the Job Run Reports artifact", pipeline)
+        self.assertIn("The email's privacy rule applies", pipeline)
+        self.assertIn("run-doc", claude_md)
+        self.assertIn("docs/run-reports.html", claude_md)
+
     def test_policy_registry_documents_exist(self) -> None:
         import json
 
