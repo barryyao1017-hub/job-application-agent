@@ -1650,7 +1650,8 @@ def outcome_report(
     clauses = [f"status IN ({','.join('?' for _ in ATTEMPTED_STATUSES)})"]
     params: list[Any] = list(ATTEMPTED_STATUSES)
     if run_id:
-        clauses.append("run_id=?")
+        # The jobs this run applied to, wherever they were discovered.
+        clauses.append("id IN (SELECT job_id FROM attempts WHERE run_id=?)")
         params.append(run_id)
     if since:
         clauses.append("updated_at >= ?")
@@ -1916,29 +1917,38 @@ def digest_payload(
         """,
         (key, iso_utc(now)),
     )
+    # Outcomes cover the jobs this run applied to, which were mostly discovered by earlier runs;
+    # discovery counts (Discovered, Skipped, Manual attention, Queued) cover this run's new jobs.
     review_rows = connection.execute(
         """
         SELECT company, title, status,
             COALESCE(review_url, application_url) AS url,
             company_policy_id
         FROM jobs
-        WHERE run_id=? AND status IN ('submitted', 'ready_for_review', 'blocked', 'manual_review')
+        WHERE (id IN (SELECT job_id FROM attempts WHERE run_id=?)
+                AND status IN ('submitted', 'ready_for_review', 'blocked'))
+            OR (run_id=? AND status='manual_review')
         ORDER BY fit_score DESC
         """,
-        (run_id,),
+        (run_id, run_id),
     ).fetchall()
+    policies = load_company_policies(
+        config.get("company_policies_path", DEFAULT_COMPANY_POLICIES_PATH)
+    )
+    outcomes = outcome_report(connection, run_id=run_id, policies=policies)
+    applied = outcomes["counts"]
     discovery = discovery_summary(connection, run_id)
     lines = [
         f"Daily job application run: {run_id}",
         f"Companies checked: {discovery['companies_checked']}",
         f"Postings scanned: {discovery['postings_scanned']}",
         f"Discovered: {sum(counts.values())}",
-        f"Submitted: {counts.get('submitted', 0)}",
-        f"Ready for review (not submitted): {counts.get('ready_for_review', 0)}",
-        f"Blocked: {counts.get('blocked', 0)}",
+        f"Submitted: {applied['submitted']}",
+        f"Ready for review (not submitted): {applied['ready_for_review']}",
+        f"Blocked: {applied['blocked']}",
         f"Manual attention: {counts.get('manual_review', 0)}",
         f"Skipped: {counts.get('skipped', 0)}",
-        f"Queued or claimed: {counts.get('queued', 0) + counts.get('claimed', 0)}",
+        f"Newly queued or claimed: {counts.get('queued', 0) + counts.get('claimed', 0)}",
         "",
     ]
     for row in review_rows:
@@ -1950,10 +1960,6 @@ def digest_payload(
         lines.append(
             f"- {row['status']}: {row['company']} — {row['title']} — {row['url']}{policy}"
         )
-    policies = load_company_policies(
-        config.get("company_policies_path", DEFAULT_COMPANY_POLICIES_PATH)
-    )
-    outcomes = outcome_report(connection, run_id=run_id, policies=policies)
     lines.append("")
     if outcomes["attempts"]:
         lines.append(
@@ -1995,7 +2001,7 @@ def digest_payload(
         if discovery["companies_with_errors"]:
             lines.append("Boards with errors: " + ", ".join(discovery["companies_with_errors"]))
         lines.append("Companies checked: " + ", ".join(discovery["companies"]))
-    if not counts.get("submitted"):
+    if not applied["submitted"]:
         lines.append("No applications were submitted.")
     return {
         "eligible": True,

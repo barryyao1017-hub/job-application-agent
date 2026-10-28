@@ -20,8 +20,8 @@ Reference notes for the application worker. `.claude/skills/application-completi
 
 ## Résumé field
 
-- The account keeps the résumé from earlier applications. On Review a worker found a "Download <approved filename>" link and verified that instead of uploading again. That counts as visible verification; do not upload again while the approved filename is shown (2026-10-22).
-- Upload with `find` → `file_upload` only when no approved filename is visible.
+- The account keeps the résumé from earlier applications and reuses it. The flow can jump from Work Eligibility straight to Review without showing the Resume step, and Review then names the stored file, not the assigned one: on 2026-10-27 it kept the Oct 17 DOCX in place of the assigned tailored PDF (Applied Scientist, Agentic AI, AWS Governance).
+- So before Review, always open the Resume step (navigate back to it if the flow skipped it) and compare the file it shows with the assignment's `resume_path`. If it is another file, replace it with `find` → `file_upload` and the assigned path. Do not upload again when the shown file already is the assigned one, such as a "Download <assigned filename>" link on Review (2026-10-22, 2026-10-27).
 
 ## Limits and known failures
 
